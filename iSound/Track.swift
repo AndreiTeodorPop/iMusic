@@ -1,6 +1,8 @@
 import Foundation
 
 struct Track: Identifiable, Hashable {
+    /// Derived from the file URL so the same file always gets the same ID across launches.
+    /// This is critical for playlist membership to survive app restarts.
     let id: UUID
     let url: URL
     let title: String
@@ -9,20 +11,47 @@ struct Track: Identifiable, Hashable {
     let duration: TimeInterval?
 
     init(url: URL) {
-        self.id = UUID()
-        self.url = url
-        self.title = url.deletingPathExtension().lastPathComponent
-        self.artist = nil
-        self.album = nil
+        self.id       = Self.stableID(for: url)
+        self.url      = url
+        self.title    = url.deletingPathExtension().lastPathComponent
+        self.artist   = nil
+        self.album    = nil
         self.duration = nil
     }
 
     init(id: UUID = UUID(), url: URL, title: String, artist: String?, album: String?, duration: TimeInterval?) {
-        self.id = id
-        self.url = url
-        self.title = title
-        self.artist = artist
-        self.album = album
+        // For locally stored files, always derive the ID from the URL for stability.
+        // For stream URLs (YouTube), accept the caller-supplied random UUID.
+        let isLocalFile = url.isFileURL
+        self.id       = isLocalFile ? Self.stableID(for: url) : id
+        self.url      = url
+        self.title    = title
+        self.artist   = artist
+        self.album    = album
         self.duration = duration
+    }
+
+    /// Produces a deterministic UUID from the file's last path component (filename).
+    /// Using just the filename (not full path) means tracks survive app reinstall
+    /// as long as the filename is the same.
+    private static func stableID(for url: URL) -> UUID {
+        let name = url.lastPathComponent
+        return UUID(uuidString: uuidString(from: name)) ?? UUID()
+    }
+
+    private static func uuidString(from string: String) -> String {
+        // Simple deterministic UUID v5-style from a string hash
+        var hash = string.utf8.reduce(UInt64(14695981039346656037)) { acc, byte in
+            (acc ^ UInt64(byte)) &* 1099511628211
+        }
+        // Format as UUID string from 8 bytes of hash (repeated for length)
+        let a = UInt32(hash & 0xFFFFFFFF)
+        hash >>= 32
+        let b = UInt16(hash & 0xFFFF)
+        hash >>= 16
+        let c = UInt16((hash & 0x0FFF) | 0x5000) // version 5
+        let d = UInt16((hash & 0x3FFF) | 0x8000) // variant bits
+        let e = string.utf8.prefix(6).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        return String(format: "%08X-%04X-%04X-%04X-%012X", a, b, c, d, e)
     }
 }

@@ -116,54 +116,52 @@ struct YouTubeSearchView: View {
 
             Spacer()
 
-            // Trailing: duration + download state
-            HStack(spacing: 8) {
+            // Trailing: duration + always-visible download button
+            HStack(spacing: 10) {
                 if result.durationSeconds > 0 {
                     Text(timeString(result.durationSeconds))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
 
-                downloadIndicator(for: result)
+                downloadButton(for: result)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { Task { await playResult(result) } }
-        .contextMenu {
-            Button {
-                Task { await downloadResult(result) }
-            } label: {
-                Label("Download to Library", systemImage: "arrow.down.circle")
-            }
-            .disabled(downloadedIDs.contains(result.id) || downloadingIDs.contains(result.id))
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if !downloadedIDs.contains(result.id) {
-                Button {
-                    Task { await downloadResult(result) }
-                } label: {
-                    Label("Download", systemImage: "arrow.down.circle")
-                }
-                .tint(.blue)
-                .disabled(downloadingIDs.contains(result.id))
-            }
-        }
     }
 
-    // MARK: - Download Indicator
+    // MARK: - Download Button
 
     @ViewBuilder
-    private func downloadIndicator(for result: YouTubeResult) -> some View {
-        if downloadingIDs.contains(result.id) {
-            ProgressView()
-                .controlSize(.small)
-                .frame(width: 20, height: 20)
-        } else if downloadedIDs.contains(result.id) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .frame(width: 20, height: 20)
-                .transition(.scale.combined(with: .opacity))
+    private func downloadButton(for result: YouTubeResult) -> some View {
+        let isDownloading = downloadingIDs.contains(result.id)
+        let isDownloaded  = downloadedIDs.contains(result.id)
+
+        Button {
+            guard !isDownloading, !isDownloaded else { return }
+            Task { await downloadResult(result) }
+        } label: {
+            ZStack {
+                if isDownloading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isDownloaded {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .transition(.scale.combined(with: .opacity))
+                } else {
+                    Image(systemName: "arrow.down.circle")
+                        .foregroundStyle(.blue)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .frame(width: 28, height: 28)
+            .animation(.spring(response: 0.3), value: isDownloading)
+            .animation(.spring(response: 0.3), value: isDownloaded)
         }
+        .buttonStyle(.plain) // prevent tap bleeding into row's onTapGesture
+        .disabled(isDownloading || isDownloaded)
     }
 
     // MARK: - Download Action
@@ -189,7 +187,7 @@ struct YouTubeSearchView: View {
                 for: result.id,
                 title: result.title
             )
-            await library.loadExistingTracks()
+            await library.reloadAfterDownload()
             withAnimation {
                 downloadingIDs.remove(result.id)
                 downloadedIDs.insert(result.id)

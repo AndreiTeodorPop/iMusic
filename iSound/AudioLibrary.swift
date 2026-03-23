@@ -8,105 +8,28 @@ import AVKit
 @MainActor
 final class AudioLibrary: ObservableObject {
     @Published private(set) var tracks: [Track] = []
-    @Published private(set) var playlists: [Playlist] = []
+    @Published var playlists: [Playlist] = []
 
     private let fileManager = FileManager.default
     private let importFolderName = "ImportedAudio"
 
+    // MARK: - Persistence
+
+    private var playlistsFileURL: URL {
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("playlists.json")
+    }
+
     init() {
+        loadPlaylists()
         Task { await loadExistingTracks() }
     }
+
+    // MARK: - Directory
 
     var importDirectory: URL {
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent(importFolderName, isDirectory: true)
-    }
-    
-    func addTrack(_ track: Track, to playlist: Playlist) {
-        if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
-            playlists[index].trackIDs.insert(track.id)
-            // This triggers the UI to refresh
-            objectWillChange.send()
-        }
-    }
-    
-    func removeTrack(_ track: Track, from playlist: Playlist) {
-        if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
-            playlists[index].trackIDs.remove(track.id)
-            objectWillChange.send()
-        }
-    }
-    
-    func createPlaylist(name: String) {
-        // Because we added the default value in the struct init, this works again:
-        let newPlaylist = Playlist(name: name)
-        playlists.append(newPlaylist)
-    }
-
-    func loadExistingTracks() async {
-        do {
-            try ensureImportDirectory()
-
-            let urls = try fileManager.contentsOfDirectory(
-                at: importDirectory,
-                includingPropertiesForKeys: nil
-            )
-
-            let audioURLs = urls
-                .filter { $0.isFileURL }
-                .sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
-
-            let newTracks = await withTaskGroup(of: Track.self) { group -> [Track] in
-                for url in audioURLs {
-                    group.addTask {
-                        await self.buildTrack(from: url)
-                    }
-                }
-
-                var tracks: [Track] = []
-
-                for await track in group {
-                    tracks.append(track)
-                }
-
-                return tracks
-            }
-
-            await MainActor.run {
-                self.tracks = newTracks
-            }
-
-        } catch {
-            print("AudioLibrary load error: \(error)")
-        }
-    }
-
-    func importFiles(from urls: [URL]) async {
-        await withTaskGroup(of: Void.self) { group in
-            for url in urls {
-                group.addTask {
-                    await self.importFile(from: url)
-                }
-            }
-        }
-        await loadExistingTracks()
-    }
-
-    func importFile(from url: URL) async {
-        do {
-            try ensureImportDirectory()
-            let destURL = uniqueDestinationURL(forOriginal: url)
-
-            var didStartAccessing = false
-            if url.startAccessingSecurityScopedResource() { didStartAccessing = true }
-            defer { if didStartAccessing { url.stopAccessingSecurityScopedResource() } }
-
-            if url.standardizedFileURL != destURL.standardizedFileURL {
-                try fileManager.copyItem(at: url, to: destURL)
-            }
-        } catch {
-            print("Failed to import file: \(error)")
-        }
     }
 
     private func ensureImportDirectory() throws {
@@ -115,11 +38,127 @@ final class AudioLibrary: ObservableObject {
         }
     }
 
+    // MARK: - Playlist CRUD
+
+    func createPlaylist(name: String) {
+        playlists.append(Playlist(name: name))
+        savePlaylists()
+    }
+
+    func addTrack(_ track: Track, to playlist: Playlist) {
+        guard let index = playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        playlists[index].trackIDs.insert(track.id)
+        savePlaylists()
+        objectWillChange.send()
+    }
+
+    func removeTrack(_ track: Track, from playlist: Playlist) {
+        guard let index = playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        playlists[index].trackIDs.remove(track.id)
+        savePlaylists()
+        objectWillChange.send()
+    }
+
+    // MARK: - Playlist Persistence
+
+    private func savePlaylists() {
+        do {
+            let data = try JSONEncoder().encode(playlists)
+            try data.write(to: playlistsFileURL, options: .atomic)
+        } catch {
+            print("Failed to save playlists: \(error)")
+        }
+    }
+
+    private func loadPlaylists() {
+        guard fileManager.fileExists(atPath: playlistsFileURL.path) else { return }
+        do {
+            let data = try Data(contentsOf: playlistsFileURL)
+            playlists = try JSONDecoder().decode([Playlist].self, from: data)
+        } catch {
+            print("Failed to load playlists: \(error)")
+        }
+    }
+
+    // MARK: - Track Loading
+
+    func loadExistingTracks() async {
+        do {
+            try ensureImportDirectory()
+
+            let urls = try fileManager.contentsOfDirectory(
+                at: importDirectory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: .skipsHiddenFiles
+            )
+
+            let audioURLs = urls
+                .filter { $0.isFileURL }
+                .sorted { a, b in
+                    // Sort by modification date descending (newest first)
+                    let dateA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let dateB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return dateA > dateB
+                }
+
+            let newTracks = await withTaskGroup(of: (Int, Track).self) { group -> [Track] in
+                for (index, url) in audioURLs.enumerated() {
+                    group.addTask {
+                        let track = await self.buildTrack(from: url)
+                        return (index, track)
+                    }
+                }
+                var indexed: [(Int, Track)] = []
+                for await pair in group { indexed.append(pair) }
+                // Restore sort order after concurrent build
+                return indexed.sorted { $0.0 < $1.0 }.map { $0.1 }
+            }
+
+            self.tracks = newTracks
+
+        } catch {
+            print("AudioLibrary load error: \(error)")
+        }
+    }
+
+    // MARK: - Import (from file picker — security scoped)
+
+    @MainActor
+    func importTrack(from url: URL) {
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        do {
+            try ensureImportDirectory()
+            let destURL = uniqueDestinationURL(forOriginal: url)
+
+            if url.standardizedFileURL != destURL.standardizedFileURL {
+                try fileManager.copyItem(at: url, to: destURL)
+            }
+
+            // Reload so the new track appears immediately
+            Task { await loadExistingTracks() }
+
+        } catch {
+            print("Import failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Import (from download — already in importDirectory)
+
+    /// Call this after StreamService.downloadAudio saves a file to ImportedAudio/.
+    /// Reloads tracks so the new download appears immediately in the library.
+    func reloadAfterDownload() async {
+        await loadExistingTracks()
+    }
+
+    // MARK: - Helpers
+
     private func uniqueDestinationURL(forOriginal url: URL) -> URL {
         let base = importDirectory.appendingPathComponent(url.lastPathComponent)
         if !fileManager.fileExists(atPath: base.path) { return base }
         let name = base.deletingPathExtension().lastPathComponent
-        let ext = base.pathExtension
+        let ext  = base.pathExtension
         var counter = 1
         while true {
             let candidate = importDirectory.appendingPathComponent("\(name) (\(counter)).\(ext)")
@@ -127,45 +166,10 @@ final class AudioLibrary: ObservableObject {
             counter += 1
         }
     }
-    
-    @MainActor
-    func importTrack(from url: URL) {
-        // 1. Gain security permission
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
-        
-        do {
-            // 2. Setup permanent storage path
-            let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let destinationURL = documentsDirectory.appendingPathComponent(url.lastPathComponent)
-            
-            // 3. Copy file to Documents folder
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
-            }
-            try FileManager.default.copyItem(at: url, to: destinationURL)
-            
-            // 4. Create Track using your memberwise initializer
-            let newTrack = Track(
-                id: UUID(),
-                url: destinationURL,
-                title: url.deletingPathExtension().lastPathComponent,
-                artist: "Unknown Artist",
-                album: nil,
-                duration: nil
-            )
-            
-            self.tracks.append(newTrack)
-            
-        } catch {
-            print("Import failed: \(error.localizedDescription)")
-        }
-    }
-    
+
     private func buildTrack(from url: URL) async -> Track {
         let asset = AVURLAsset(url: url)
-
-        var title = url.deletingPathExtension().lastPathComponent
+        var title    = url.deletingPathExtension().lastPathComponent
         var artist: String?
         var album: String?
         var duration: TimeInterval?
@@ -175,35 +179,18 @@ final class AudioLibrary: ObservableObject {
             duration = cmDuration.seconds
 
             let metadata = try await asset.load(.commonMetadata)
-
             for item in metadata {
                 if item.commonKey?.rawValue == "title",
-                   let v = try await item.load(.stringValue) {
-                    title = v
-                }
-
+                   let v = try await item.load(.stringValue) { title = v }
                 if item.commonKey?.rawValue == "artist",
-                   let v = try await item.load(.stringValue) {
-                    artist = v
-                }
-
+                   let v = try await item.load(.stringValue) { artist = v }
                 if item.commonKey?.rawValue == "albumName",
-                   let v = try await item.load(.stringValue) {
-                    album = v
-                }
+                   let v = try await item.load(.stringValue) { album = v }
             }
-
         } catch {
             print("Failed loading metadata:", error)
         }
 
-        return Track(
-            url: url,
-            title: title,
-            artist: artist,
-            album: album,
-            duration: duration
-        )
+        return Track(url: url, title: title, artist: artist, album: album, duration: duration)
     }
-
 }
