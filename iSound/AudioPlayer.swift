@@ -74,10 +74,13 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let nc = NotificationCenter.default
         let endName = AVPlayerItem.didPlayToEndTimeNotification
         let endObject = item as AnyObject
-        Task.detached { [weak self] in
+        // Use a structured task and avoid capturing self in a @Sendable context
+        // Capture immutable references by value
+        let observedEndObject = endObject
+        Task {
             for await notification in nc.notifications(named: endName) {
-                if let obj = notification.object as AnyObject?, obj === endObject {
-                    await MainActor.run {
+                if let obj = notification.object as AnyObject?, obj === observedEndObject {
+                    await MainActor.run { [weak self] in
                         self?.playNext()
                     }
                     break
@@ -118,13 +121,14 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             forInterval: interval,
             queue: .main
         ) { [weak self] time in
-            guard let self else { return }
-            self.currentTime = time.seconds
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.currentTime = time.seconds
 
-            // For HLS, duration may not be known immediately — update it when available
-            if let duration = self.streamPlayer?.currentItem?.duration,
-               duration.isNumeric && duration.seconds > 0 && self.duration == 0 {
-                self.duration = duration.seconds
+                if let itemDuration = self.streamPlayer?.currentItem?.duration,
+                   itemDuration.isNumeric && itemDuration.seconds > 0 && self.duration == 0 {
+                    self.duration = itemDuration.seconds
+                }
             }
         }
     }

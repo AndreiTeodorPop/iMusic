@@ -66,11 +66,6 @@ struct YouTubeService {
         ]
         let (data, _) = try await URLSession.shared.data(from: c.url!)
 
-        // Debug — this MUST print before the decode line
-        print("=== RAW RESPONSE ===")
-        print(String(data: data, encoding: .utf8) ?? "empty")
-        print("=== END ===")
-
         struct SearchResponse: Decodable {
             struct Item: Decodable {
                 struct Id: Decodable { let videoId: String }
