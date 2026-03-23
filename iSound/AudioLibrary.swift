@@ -2,6 +2,8 @@ import Combine
 import Foundation
 import UniformTypeIdentifiers
 import AVFoundation
+import SwiftUI
+import AVKit
 
 @MainActor
 final class AudioLibrary: ObservableObject {

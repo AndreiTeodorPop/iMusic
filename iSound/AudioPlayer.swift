@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import SwiftUI
 import MediaPlayer
+import AVKit
 
 @MainActor
 final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
@@ -20,6 +21,113 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var observationTask: Task<Void, Never>?
     private var playlistQueue: [Track] = []
     private var currentIndex: Int = 0
+    
+    private var streamPlayer: AVPlayer?
+    private var streamTimeObserver: Any?
+    
+    // MARK: - New method: play a YouTube stream
+    func playYouTube(url: URL, title: String, artist: String, duration: TimeInterval) {
+        stopStreamPlayer()
+        stop()
+
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+        streamPlayer = AVPlayer(playerItem: item)
+        streamPlayer?.automaticallyWaitsToMinimizeStalling = false
+
+        currentTrack = Track(
+            url: url,
+            title: title,
+            artist: artist,
+            album: "YouTube",
+            duration: duration
+        )
+        self.duration = duration
+        currentTime = 0
+        isPlaying = true
+
+        streamPlayer?.play()
+        
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            print("Player status: \(streamPlayer?.status.rawValue ?? -1)")
+            print("Player rate: \(streamPlayer?.rate ?? -1)")
+            print("Item status: \(streamPlayer?.currentItem?.status.rawValue ?? -1)")
+            print("Item error: \(streamPlayer?.currentItem?.error?.localizedDescription ?? "none")")
+        }
+        
+        attachStreamTimeObserver()
+        updateNowPlayingInfo()
+
+        // Observe when stream is ready to confirm it actually started
+        Task { @MainActor in
+            do {
+                let isPlayable = try await asset.load(.isPlayable)
+                if !isPlayable {
+                    print("Asset not playable: \(url)")
+                }
+            } catch {
+                print("Asset load error: \(error)")
+            }
+        }
+
+        let nc = NotificationCenter.default
+        let endName = AVPlayerItem.didPlayToEndTimeNotification
+        let endObject = item as AnyObject
+        Task.detached { [weak self] in
+            for await notification in nc.notifications(named: endName) {
+                if let obj = notification.object as AnyObject?, obj === endObject {
+                    await MainActor.run {
+                        self?.playNext()
+                    }
+                    break
+                }
+            }
+        }
+    }
+    
+    func togglePlayPauseStream() {
+        guard let sp = streamPlayer else { togglePlayPause(); return }
+        if isPlaying {
+            sp.pause()
+            isPlaying = false
+            stopTimer()
+        } else {
+            sp.play()
+            isPlaying = true
+        }
+        updateNowPlayingInfo()
+    }
+
+    // MARK: - Update your existing stop() — add these two lines inside it:
+    // stopStreamPlayer()
+    // (place them at the top of the existing stop() body)
+
+    private func stopStreamPlayer() {
+        streamPlayer?.pause()
+        if let obs = streamTimeObserver {
+            streamPlayer?.removeTimeObserver(obs)
+            streamTimeObserver = nil
+        }
+        streamPlayer = nil
+    }
+
+    private func attachStreamTimeObserver() {
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        streamTimeObserver = streamPlayer?.addPeriodicTimeObserver(
+            forInterval: interval,
+            queue: .main
+        ) { [weak self] time in
+            guard let self else { return }
+            self.currentTime = time.seconds
+
+            // For HLS, duration may not be known immediately — update it when available
+            if let duration = self.streamPlayer?.currentItem?.duration,
+               duration.isNumeric && duration.seconds > 0 && self.duration == 0 {
+                self.duration = duration.seconds
+            }
+        }
+    }
 
     func configureAudioSession() {
         do {
@@ -58,6 +166,22 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func togglePlayPause() {
+        // Handle stream player (YouTube)
+        if let sp = streamPlayer {
+            if isPlaying {
+                sp.pause()
+                isPlaying = false
+                stopTimer()
+            } else {
+                sp.play()
+                isPlaying = true
+                startTimer()
+            }
+            updateNowPlayingInfo()
+            return
+        }
+
+        // Handle local player
         guard let player = player else { return }
         if player.isPlaying {
             player.pause()
@@ -72,6 +196,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func stop() {
+        stopStreamPlayer()
         stopTimer()
         player?.stop()
         player = nil
@@ -83,6 +208,14 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func seek(to time: TimeInterval) {
+        if let sp = streamPlayer {
+            let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+            sp.seek(to: cmTime)
+            currentTime = time
+            updateNowPlayingInfo()
+            return
+        }
+
         guard let player = player else { return }
         player.currentTime = min(max(0, time), player.duration)
         currentTime = player.currentTime
@@ -256,3 +389,4 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         observationTask?.cancel()
     }
 }
+

@@ -29,9 +29,9 @@ struct ContentView: View {
                 homeTab
                     .tabItem { Label("Home", systemImage: "house") }
                 
-                searchTab
-                    .tabItem { Label("Search", systemImage: "magnifyingglass") }
-                
+                YouTubeSearchView(library: library)
+                    .tabItem { Label("YouTube", systemImage: "play.rectangle") }
+
                 libraryTab
                     .tabItem { Label("Library", systemImage: "music.note.list") }
             }
@@ -107,48 +107,65 @@ struct ContentView: View {
             }
         }
     }
-
-    private var searchTab: some View {
+    
+    private var libraryTab: some View {
         NavigationStack {
-            List(filteredTracks) { track in
-                trackRow(track)
+            List {
+                savedSongsSection
+                playlistsSection
             }
-            .navigationTitle("Search")
-            .searchable(text: $searchText)
+            .navigationTitle("Library")
+            .navigationDestination(for: Playlist.self) { playlist in
+                PlaylistDetailView(playlist: playlist, library: library)
+            }
             .toolbar {
-                Button { showingImporter = true } label: { Image(systemName: "square.and.arrow.down") }
-            }
-            .overlay {
-                if library.tracks.isEmpty {
-                    ContentUnavailableView("No Music", systemImage: "music.note", description: Text("Tap the import icon to add songs"))
+                Button { showingImporter = true } label: {
+                    Image(systemName: "square.and.arrow.down")
                 }
             }
         }
     }
 
-    private var libraryTab: some View {
-        NavigationStack {
-            List {
-                Button(action: { showingPlaylistAlert = true }) {
-                    Label("Create Playlist", systemImage: "plus.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                
-                ForEach(library.playlists) { playlist in
-                    NavigationLink(value: playlist) {
-                        HStack {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.accentColor.gradient)
-                                .frame(width: 50, height: 50)
-                                .overlay(Image(systemName: "music.note.list").foregroundColor(.white))
-                            Text(playlist.name).font(.headline)
-                        }
+    @ViewBuilder
+    private var savedSongsSection: some View {
+        Section {
+            NavigationLink {
+                SavedSongsView(library: library)
+            } label: {
+                HStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.pink.gradient)
+                        .frame(width: 50, height: 50)
+                        .overlay(Image(systemName: "music.note").foregroundColor(.white))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Saved Songs").font(.headline)
+                        Text("\(library.tracks.count) songs")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
-            .navigationTitle("Library")
-            .navigationDestination(for: Playlist.self) { playlist in
-                PlaylistDetailView(playlist: playlist, library: library)
+        }
+    }
+
+    @ViewBuilder
+    private var playlistsSection: some View {
+        Section("Playlists") {
+            Button(action: { showingPlaylistAlert = true }) {
+                Label("Create Playlist", systemImage: "plus.circle.fill")
+                    .foregroundStyle(.green)
+            }
+
+            ForEach(library.playlists) { playlist in
+                NavigationLink(value: playlist) {
+                    HStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.accentColor.gradient)
+                            .frame(width: 50, height: 50)
+                            .overlay(Image(systemName: "music.note.list").foregroundColor(.white))
+                        Text(playlist.name).font(.headline)
+                    }
+                }
             }
         }
     }

@@ -5,12 +5,33 @@ struct NowPlayingView: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        VStack(spacing: 30) {
-            // 1. Grab handle
-            Capsule()
-                .fill(.secondary.opacity(0.3))
-                .frame(width: 40, height: 6)
-                .padding(.top)
+        VStack(spacing: 20) {
+                    // MARK: - Header with Back Button
+                    HStack {
+                        Button {
+                            dismiss() // 2. Dismiss the view when tapped
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .font(.title2.bold())
+                                .foregroundStyle(.primary)
+                                .padding(10)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        Text("Now Playing")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                        
+                        Spacer()
+                        
+                        // Empty view to balance the header symmetry
+                        Color.clear.frame(width: 44, height: 44)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 10)
 
             // 2. Large Album Art
             RoundedRectangle(cornerRadius: 20)
@@ -70,6 +91,44 @@ struct NowPlayingView: View {
                 }
             }
             .foregroundStyle(.primary)
+            
+            VStack(spacing: 20) {
+                // Volume Control Row
+                HStack(spacing: 15) {
+                    Image(systemName: "speaker.fill")
+                        .font(.caption)
+                    
+                    SystemVolumeSlider()
+                        .frame(height: 30)
+                    
+                    Image(systemName: "speaker.wave.3.fill")
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                
+                // Bottom Utility Row
+                HStack {
+                    
+                    Spacer()
+                    
+                    Button {
+                        // Future logic for Shuffle/Repeat
+                    } label: {
+                        Image(systemName: "shuffle")
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    // Lyrics or Queue button
+                    Button { } label: {
+                        Image(systemName: "list.bullet")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            .padding(.horizontal, 30)
             
             Spacer()
         }
