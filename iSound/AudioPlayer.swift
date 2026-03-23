@@ -12,6 +12,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var currentTrack: Track?
     @Published var isExpanded: Bool = false
+    @Published var isShuffled: Bool = false  // NEW
 
     private var player: AVAudioPlayer?
     private var timer: Timer?
@@ -19,13 +20,43 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var interruptionObserver: Any?
     private var routeChangeObserver: Any?
     private var observationTask: Task<Void, Never>?
+
+    // Original order preserved so we can un-shuffle
+    private var originalQueue: [Track] = []
     private var playlistQueue: [Track] = []
     private var currentIndex: Int = 0
-    
+
     private var streamPlayer: AVPlayer?
     private var streamTimeObserver: Any?
-    
-    // MARK: - New method: play a YouTube stream
+
+    // MARK: - Shuffle
+
+    func toggleShuffle() {
+        isShuffled.toggle()
+        guard !playlistQueue.isEmpty else { return }
+        let current = playlistQueue[currentIndex]
+        if isShuffled {
+            // Shuffle remaining tracks, keep current at front
+            var remaining = originalQueue.filter { $0.id != current.id }
+            remaining.shuffle()
+            playlistQueue = [current] + remaining
+            currentIndex = 0
+        } else {
+            // Restore original order, seek to current track's position
+            playlistQueue = originalQueue
+            currentIndex = originalQueue.firstIndex { $0.id == current.id } ?? 0
+        }
+    }
+
+    // MARK: - Queue (read-only for UI)
+
+    var upcomingTracks: [Track] {
+        guard currentIndex + 1 < playlistQueue.count else { return [] }
+        return Array(playlistQueue[(currentIndex + 1)...])
+    }
+
+    // MARK: - YouTube streaming
+
     func playYouTube(url: URL, title: String, artist: String, duration: TimeInterval) {
         stopStreamPlayer()
         stop()
@@ -47,25 +78,14 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         isPlaying = true
 
         streamPlayer?.play()
-        
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            print("Player status: \(streamPlayer?.status.rawValue ?? -1)")
-            print("Player rate: \(streamPlayer?.rate ?? -1)")
-            print("Item status: \(streamPlayer?.currentItem?.status.rawValue ?? -1)")
-            print("Item error: \(streamPlayer?.currentItem?.error?.localizedDescription ?? "none")")
-        }
-        
+
         attachStreamTimeObserver()
         updateNowPlayingInfo()
 
-        // Observe when stream is ready to confirm it actually started
         Task { @MainActor in
             do {
                 let isPlayable = try await asset.load(.isPlayable)
-                if !isPlayable {
-                    print("Asset not playable: \(url)")
-                }
+                if !isPlayable { print("Asset not playable: \(url)") }
             } catch {
                 print("Asset load error: \(error)")
             }
@@ -74,37 +94,15 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let nc = NotificationCenter.default
         let endName = AVPlayerItem.didPlayToEndTimeNotification
         let endObject = item as AnyObject
-        // Use a structured task and avoid capturing self in a @Sendable context
-        // Capture immutable references by value
-        let observedEndObject = endObject
         Task {
             for await notification in nc.notifications(named: endName) {
-                if let obj = notification.object as AnyObject?, obj === observedEndObject {
-                    await MainActor.run { [weak self] in
-                        self?.playNext()
-                    }
+                if let obj = notification.object as AnyObject?, obj === endObject {
+                    await MainActor.run { [weak self] in self?.playNext() }
                     break
                 }
             }
         }
     }
-    
-    func togglePlayPauseStream() {
-        guard let sp = streamPlayer else { togglePlayPause(); return }
-        if isPlaying {
-            sp.pause()
-            isPlaying = false
-            stopTimer()
-        } else {
-            sp.play()
-            isPlaying = true
-        }
-        updateNowPlayingInfo()
-    }
-
-    // MARK: - Update your existing stop() — add these two lines inside it:
-    // stopStreamPlayer()
-    // (place them at the top of the existing stop() body)
 
     private func stopStreamPlayer() {
         streamPlayer?.pause()
@@ -118,20 +116,20 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func attachStreamTimeObserver() {
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         streamTimeObserver = streamPlayer?.addPeriodicTimeObserver(
-            forInterval: interval,
-            queue: .main
+            forInterval: interval, queue: .main
         ) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.currentTime = time.seconds
-
-                if let itemDuration = self.streamPlayer?.currentItem?.duration,
-                   itemDuration.isNumeric && itemDuration.seconds > 0 && self.duration == 0 {
-                    self.duration = itemDuration.seconds
+                if let d = self.streamPlayer?.currentItem?.duration,
+                   d.isNumeric, d.seconds > 0, self.duration == 0 {
+                    self.duration = d.seconds
                 }
             }
         }
     }
+
+    // MARK: - Audio Session
 
     func configureAudioSession() {
         do {
@@ -143,12 +141,12 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             print("Audio session error: \(error)")
         }
     }
-    
+
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-            // Since the class is @MainActor, this method is
-            // automatically treated as being on the main thread.
-            self.playNext()
-        }
+        playNext()
+    }
+
+    // MARK: - Playback
 
     func play(track: Track) {
         stop()
@@ -158,7 +156,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             self.currentTrack = track
             self.duration = player.duration
             self.currentTime = 0
-            player.delegate = self // Add this line
+            player.delegate = self
             player.prepareToPlay()
             player.play()
             isPlaying = true
@@ -170,32 +168,15 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func togglePlayPause() {
-        // Handle stream player (YouTube)
         if let sp = streamPlayer {
-            if isPlaying {
-                sp.pause()
-                isPlaying = false
-                stopTimer()
-            } else {
-                sp.play()
-                isPlaying = true
-                startTimer()
-            }
+            if isPlaying { sp.pause(); isPlaying = false; stopTimer() }
+            else         { sp.play();  isPlaying = true;  startTimer() }
             updateNowPlayingInfo()
             return
         }
-
-        // Handle local player
-        guard let player = player else { return }
-        if player.isPlaying {
-            player.pause()
-            isPlaying = false
-            stopTimer()
-        } else {
-            player.play()
-            isPlaying = true
-            startTimer()
-        }
+        guard let player else { return }
+        if player.isPlaying { player.pause(); isPlaying = false; stopTimer() }
+        else                { player.play();  isPlaying = true;  startTimer() }
         updateNowPlayingInfo()
     }
 
@@ -213,33 +194,52 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func seek(to time: TimeInterval) {
         if let sp = streamPlayer {
-            let cmTime = CMTime(seconds: time, preferredTimescale: 600)
-            sp.seek(to: cmTime)
+            sp.seek(to: CMTime(seconds: time, preferredTimescale: 600))
             currentTime = time
             updateNowPlayingInfo()
             return
         }
-
-        guard let player = player else { return }
+        guard let player else { return }
         player.currentTime = min(max(0, time), player.duration)
         currentTime = player.currentTime
         updateNowPlayingInfo()
     }
 
+    func playAll(tracks: [Track]) {
+        guard !tracks.isEmpty else { return }
+        originalQueue = tracks
+        playlistQueue = isShuffled ? tracks.shuffled() : tracks
+        currentIndex = 0
+        play(track: playlistQueue[0])
+    }
+
+    func playNext() {
+        guard currentIndex + 1 < playlistQueue.count else { stop(); return }
+        currentIndex += 1
+        play(track: playlistQueue[currentIndex])
+    }
+
+    func playPrevious() {
+        if currentTime > 3 {
+            seek(to: 0)
+        } else if currentIndex > 0 {
+            currentIndex -= 1
+            play(track: playlistQueue[currentIndex])
+        } else {
+            seek(to: 0)
+        }
+    }
+
+    // MARK: - Timer
+
     private func startTimer() {
         stopTimer()
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
-
             Task { @MainActor in
                 guard let player = self.player else { return }
-
                 self.currentTime = player.currentTime
-
-                if !player.isPlaying {
-                    self.isPlaying = false
-                    self.stopTimer()
-                }
+                if !player.isPlaying { self.isPlaying = false; self.stopTimer() }
             }
         }
         RunLoop.main.add(timer!, forMode: .common)
@@ -250,32 +250,15 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         timer = nil
     }
 
+    // MARK: - Notifications
+
     private func observeAudioSessionNotifications() {
-        // We create a single task to manage our async streams
         observationTask = Task { @MainActor in
-            // Use withTaskGroup if you want to run them in parallel,
-            // but simple separate tasks or loops work too.
-            
-            // 1. Observe Interruptions
             let interruptions = NotificationCenter.default.notifications(named: AVAudioSession.interruptionNotification)
-            
-            // 2. Observe Route Changes
-            let routeChanges = NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
-
-            // We can use a TaskGroup or just spawn two sub-tasks
-            async let handleInterruptions: Void = {
-                for await notification in interruptions {
-                    await self.handleInterruption(notification)
-                }
-            }()
-
-            async let handleRouteChanges: Void = {
-                for await notification in routeChanges {
-                    await self.handleRouteChange(notification)
-                }
-            }()
-            
-            _ = await [handleInterruptions, handleRouteChanges]
+            let routeChanges  = NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
+            async let i: Void = { for await n in interruptions { await self.handleInterruption(n) } }()
+            async let r: Void = { for await n in routeChanges  { await self.handleRouteChange(n)  } }()
+            _ = await [i, r]
         }
     }
 
@@ -287,24 +270,20 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         case .began:
             if isPlaying { togglePlayPause() }
         case .ended:
-            let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt
-            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue ?? 0)
-            if options.contains(.shouldResume) {
-                if !isPlaying { togglePlayPause() }
-            }
+            let opts = AVAudioSession.InterruptionOptions(rawValue: (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0)
+            if opts.contains(.shouldResume), !isPlaying { togglePlayPause() }
         @unknown default: break
         }
     }
 
     private func handleRouteChange(_ notification: Notification) {
         guard let info = notification.userInfo,
-              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
-              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
-        if reason == .oldDeviceUnavailable {
-            // e.g., headphones unplugged
-            if isPlaying { togglePlayPause() }
-        }
+              let v = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: v) else { return }
+        if reason == .oldDeviceUnavailable, isPlaying { togglePlayPause() }
     }
+
+    // MARK: - Now Playing / Remote Commands
 
     private func updateNowPlayingInfo() {
         var info: [String: Any] = [:]
@@ -318,79 +297,23 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func setupRemoteCommands() {
-        let commandCenter = MPRemoteCommandCenter.shared()
-        commandCenter.playCommand.isEnabled = true
-        commandCenter.playCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            if !self.isPlaying { self.togglePlayPause() }
-            return .success
-        }
-        commandCenter.pauseCommand.isEnabled = true
-        commandCenter.pauseCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            if self.isPlaying { self.togglePlayPause() }
-            return .success
-        }
-        commandCenter.togglePlayPauseCommand.isEnabled = true
-        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
-            self?.togglePlayPause()
-            return .success
-        }
-        // Add Next Track Command
-        commandCenter.nextTrackCommand.isEnabled = true
-        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            Task { @MainActor in
-                    self.playNext()
-                }
-                return .success
-            }
+        let cc = MPRemoteCommandCenter.shared()
+        cc.playCommand.isEnabled  = true
+        cc.pauseCommand.isEnabled = true
+        cc.togglePlayPauseCommand.isEnabled = true
+        cc.nextTrackCommand.isEnabled     = true
+        cc.previousTrackCommand.isEnabled = true
 
-            // Add Previous Track Command
-        commandCenter.previousTrackCommand.isEnabled = true
-        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
-                guard let self = self else { return .commandFailed }
-                Task { @MainActor in
-                    self.playPrevious()
-                }
-                return .success
-            }
-        
-    }
-    
-    func playAll(tracks: [Track]) {
-        guard !tracks.isEmpty else { return }
-        self.playlistQueue = tracks
-        self.currentIndex = 0
-        self.play(track: tracks[0])
-    }
-    
-    func playNext() {
-        guard currentIndex + 1 < playlistQueue.count else {
-            // Option: loop back to 0 or stop
-            stop()
-            return
-        }
-        currentIndex += 1
-        play(track: playlistQueue[currentIndex])
-    }
-
-    func playPrevious() {
-        // If we are more than 3 seconds into a song, restart it instead of skipping back
-        if currentTime > 3 {
-            seek(to: 0)
-        } else if currentIndex > 0 {
-            currentIndex -= 1
-            play(track: playlistQueue[currentIndex])
-        } else {
-            seek(to: 0)
-        }
+        cc.playCommand.addTarget  { [weak self] _ in self.map { if !$0.isPlaying { $0.togglePlayPause() } }; return .success }
+        cc.pauseCommand.addTarget { [weak self] _ in self.map { if  $0.isPlaying { $0.togglePlayPause() } }; return .success }
+        cc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.togglePlayPause(); return .success }
+        cc.nextTrackCommand.addTarget     { [weak self] _ in Task { @MainActor in self?.playNext()     }; return .success }
+        cc.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.playPrevious() }; return .success }
     }
 
     deinit {
         if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
-        if let o = routeChangeObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = routeChangeObserver  { NotificationCenter.default.removeObserver(o) }
         observationTask?.cancel()
     }
 }
-

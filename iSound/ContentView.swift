@@ -4,14 +4,12 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var library = AudioLibrary()
     @EnvironmentObject private var player: AudioPlayer
-    
-    // UI State
+
     @State private var searchText: String = ""
     @State private var showingImporter = false
     @State private var showingPlaylistAlert = false
     @State private var newPlaylistName = ""
 
-    // Search Logic
     private var filteredTracks: [Track] {
         let base = library.tracks
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -24,23 +22,21 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            // MARK: - Layer 1: Navigation
             TabView {
                 homeTab
                     .tabItem { Label("Home", systemImage: "house") }
-                
+
                 YouTubeSearchView(library: library)
                     .tabItem { Label("YouTube", systemImage: "play.rectangle") }
 
                 libraryTab
                     .tabItem { Label("Library", systemImage: "music.note.list") }
             }
-            
-            // MARK: - Layer 2: Mini-Player Overlay
+
             if player.currentTrack != nil {
                 PlayerControlsView()
                     .padding(.horizontal)
-                    .padding(.bottom, 55) // Clears the TabBar area
+                    .padding(.bottom, 55)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .onTapGesture {
                         player.isExpanded = true
@@ -68,10 +64,8 @@ struct ContentView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                // Ensure we handle the security-scoped URLs correctly here
                 for url in urls {
-                    // Calling it explicitly
-                    self.library.importTrack(from: url)
+                    library.importTrack(from: url)
                 }
             case .failure(let error):
                 print("Import failed: \(error.localizedDescription)")
@@ -82,7 +76,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Tab Views
+    // MARK: - Tabs
 
     private var homeTab: some View {
         NavigationStack {
@@ -92,9 +86,10 @@ struct ContentView: View {
                         TrackCard(track: track)
                             .onTapGesture { player.play(track: track) }
                     }
-                    
+
                     homeSection(title: "Your Playlists", items: library.playlists) { playlist in
-                        NavigationLink(value: playlist) {
+                        // Pass ID only — PlaylistDetailView looks up live data itself
+                        NavigationLink(value: playlist.id) {
                             playlistCard(playlist)
                         }
                     }
@@ -102,12 +97,13 @@ struct ContentView: View {
                 .padding()
             }
             .navigationTitle("Home")
-            .navigationDestination(for: Playlist.self) { playlist in
-                PlaylistDetailView(playlist: playlist, library: library)
+            // Destination keyed on UUID
+            .navigationDestination(for: UUID.self) { id in
+                PlaylistDetailView(playlistID: id, library: library)
             }
         }
     }
-    
+
     private var libraryTab: some View {
         NavigationStack {
             List {
@@ -115,8 +111,8 @@ struct ContentView: View {
                 playlistsSection
             }
             .navigationTitle("Library")
-            .navigationDestination(for: Playlist.self) { playlist in
-                PlaylistDetailView(playlist: playlist, library: library)
+            .navigationDestination(for: UUID.self) { id in
+                PlaylistDetailView(playlistID: id, library: library)
             }
             .toolbar {
                 Button { showingImporter = true } label: {
@@ -125,6 +121,8 @@ struct ContentView: View {
             }
         }
     }
+
+    // MARK: - Sections
 
     @ViewBuilder
     private var savedSongsSection: some View {
@@ -157,7 +155,8 @@ struct ContentView: View {
             }
 
             ForEach(library.playlists) { playlist in
-                NavigationLink(value: playlist) {
+                // Navigate by ID so PlaylistDetailView always reads live data
+                NavigationLink(value: playlist.id) {
                     HStack {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(Color.accentColor.gradient)
@@ -170,7 +169,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - View Helpers
+    // MARK: - Helpers
 
     @ViewBuilder
     private func homeSection<Data: RandomAccessCollection, Content: View>(
@@ -214,12 +213,6 @@ struct ContentView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { player.play(track: track) }
-        .contextMenu {
-            Menu("Add to Playlist") {
-                ForEach(library.playlists) { playlist in
-                    Button(playlist.name) { library.addTrack(track, to: playlist) }
-                }
-            }
-        }
+        // Context menu removed — add to playlist via SavedSongsView + button
     }
 }
