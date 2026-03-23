@@ -59,6 +59,33 @@ final class AudioLibrary: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Deletes a track's file from ImportedAudio/ AND Downloads/,
+    /// removes it from all playlists, and reloads the library.
+    func deleteTrack(_ track: Track) async {
+        let fileManager = FileManager.default
+
+        // 1. Delete from ImportedAudio (in-app storage)
+        if fileManager.fileExists(atPath: track.url.path) {
+            try? fileManager.removeItem(at: track.url)
+        }
+
+        // 2. Also delete from system Downloads folder if a copy exists there
+        let downloadsDir = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        let downloadsURL = downloadsDir.appendingPathComponent(track.url.lastPathComponent)
+        if fileManager.fileExists(atPath: downloadsURL.path) {
+            try? fileManager.removeItem(at: downloadsURL)
+        }
+
+        // 3. Remove from every playlist that contains it
+        for index in playlists.indices {
+            playlists[index].trackIDs.remove(track.id)
+        }
+        savePlaylists()
+
+        // 4. Reload so the UI reflects the deletion immediately
+        await loadExistingTracks()
+    }
+
     // MARK: - Playlist Persistence
 
     private func savePlaylists() {

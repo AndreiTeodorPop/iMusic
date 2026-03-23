@@ -89,9 +89,10 @@ struct SavedSongsView: View {
     var body: some View {
         List {
             ForEach(library.tracks, id: \.id) { track in
+                let isCurrent = (player.currentTrack?.id == track.id)
                 SavedTrackRow(
                     track: track,
-                    isCurrent: player.currentTrack?.id == track.id,
+                    isCurrent: isCurrent,
                     playlists: library.playlists,
                     onTap: { player.play(track: track) },
                     onAddToPlaylist: { playlist in
@@ -99,6 +100,15 @@ struct SavedSongsView: View {
                         showToast("Added to \"\(playlist.name)\"")
                     }
                 )
+            }
+            .onDelete { indexSet in
+                for index in indexSet {
+                    let track = library.tracks[index]
+                    if player.currentTrack?.id == track.id {
+                        player.stop()
+                    }
+                    Task { await library_removeTrackFromDiskAndReload(track, in: library) }
+                }
             }
         }
         .navigationTitle("Saved Songs")
@@ -160,3 +170,17 @@ struct SavedSongsView: View {
         .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
     }
 }
+// MARK: - Deletion helper (non-conflicting)
+@MainActor
+func library_removeTrackFromDiskAndReload(_ track: Track, in library: AudioLibrary) async {
+    let fm = FileManager.default
+    do {
+        if fm.fileExists(atPath: track.url.path) {
+            try fm.removeItem(at: track.url)
+        }
+        await library.loadExistingTracks()
+    } catch {
+        print("Failed to delete track: \(error)")
+    }
+}
+

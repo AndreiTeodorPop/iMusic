@@ -25,10 +25,10 @@ struct NowPlayingView: View {
         player.currentTrack?.album == "YouTube"
     }
 
-    // Check if the current YouTube track is already saved locally
+    // Check if the current YouTube track is already saved locally (persisted)
     private var isAlreadySaved: Bool {
-        guard let track = player.currentTrack else { return false }
-        return library.tracks.contains { $0.title == track.title }
+        guard let track = player.currentTrack, let videoID = track.youtubeVideoID else { return false }
+        return DownloadedStore.contains(videoID)
     }
 
     var body: some View {
@@ -99,31 +99,18 @@ struct NowPlayingView: View {
 
             // MARK: Main Controls
             HStack(spacing: 50) {
-                Button { player.playPrevious() } label: {
+                Button { playPreviousOrFallback() } label: {
                     Image(systemName: "backward.fill").font(.title)
                 }
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 80))
                 }
-                Button { player.playNext() } label: {
+                Button { playNextOrFallback() } label: {
                     Image(systemName: "forward.fill").font(.title)
                 }
             }
             .foregroundStyle(.primary)
-
-            // MARK: Volume
-            HStack(spacing: 12) {
-                Image(systemName: "speaker.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                SystemVolumeSlider()
-                    .frame(height: 30)
-                Image(systemName: "speaker.wave.3.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 30)
 
             // MARK: Action Row: Shuffle | Download | Add to Playlist | Queue
             HStack {
@@ -221,9 +208,8 @@ struct NowPlayingView: View {
                 pendingFileURL = nil
                 switch result {
                 case .success(let savedURL):
-                    let fileName = identifiable.url.lastPathComponent
-                    try? StreamService.copyToImportedAudio(from: savedURL, fileName: fileName)
-                    Task { await library.reloadAfterDownload() }
+                    // Do not import into app storage; honor the user’s chosen location
+                    if let id = player.currentTrack?.youtubeVideoID { DownloadedStore.add(id) }
                     isDownloaded = true
                     showToast("Saved to \"\(savedURL.deletingLastPathComponent().lastPathComponent)\"")
                 case .failure(let error):
@@ -246,10 +232,39 @@ struct NowPlayingView: View {
         do {
             let tempURL = try await StreamService.downloadAudioToTemp(for: videoID, title: track.title)
             isDownloading = false   // spinner stops; picker takes over
-            pendingFileURL = tempURL
+            await MainActor.run { pendingFileURL = tempURL }
         } catch {
             isDownloading = false
             showToast(error.localizedDescription, isError: true)
+        }
+    }
+
+    private func playNextOrFallback() {
+        if !player.upcomingTracks.isEmpty {
+            player.playNext()
+            return
+        }
+        guard let current = player.currentTrack else { return }
+        if let idx = library.tracks.firstIndex(where: { $0.id == current.id }) {
+            let nextIdx = library.tracks.index(after: idx)
+            if nextIdx < library.tracks.endIndex {
+                let nextTrack = library.tracks[nextIdx]
+                player.play(track: nextTrack)
+            }
+        }
+    }
+
+    private func playPreviousOrFallback() {
+        if !player.upcomingTracks.isEmpty {
+            player.playPrevious()
+            return
+        }
+        guard let current = player.currentTrack else { return }
+        if let idx = library.tracks.firstIndex(where: { $0.id == current.id }),
+           idx > library.tracks.startIndex {
+            let prevIdx = library.tracks.index(before: idx)
+            let prevTrack = library.tracks[prevIdx]
+            player.play(track: prevTrack)
         }
     }
 
