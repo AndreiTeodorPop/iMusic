@@ -53,9 +53,7 @@ struct StreamService {
                             .appendingPathComponent("ImportedAudio", isDirectory: true)
         try fileManager.createDirectory(at: importDir, withIntermediateDirectories: true)
         let destURL = importDir.appendingPathComponent(fileName)
-        if fileManager.fileExists(atPath: destURL.path) {
-            try fileManager.removeItem(at: destURL)
-        }
+        guard !fileManager.fileExists(atPath: destURL.path) else { return }
         try fileManager.copyItem(at: sourceURL, to: destURL)
     }
 

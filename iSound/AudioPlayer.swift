@@ -244,6 +244,15 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         play(track: playlistQueue[0])
     }
 
+    /// Plays a single track while setting the full queue for next/previous navigation.
+    func play(track: Track, queue: [Track]) {
+        clearYouTubeQueue()
+        originalQueue = queue
+        playlistQueue = isShuffled ? queue.shuffled() : queue
+        currentIndex = playlistQueue.firstIndex(where: { $0.id == track.id }) ?? 0
+        play(track: track)
+    }
+
     func playNext() {
         // YouTube queue takes priority
         if !youtubeQueue.isEmpty {
@@ -258,9 +267,9 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
             return
         }
-        // Local queue
-        guard currentIndex + 1 < playlistQueue.count else { stop(); return }
-        currentIndex += 1
+        // Local queue — wrap around to the first track
+        guard !playlistQueue.isEmpty else { stop(); return }
+        currentIndex = (currentIndex + 1) % playlistQueue.count
         play(track: playlistQueue[currentIndex])
     }
 

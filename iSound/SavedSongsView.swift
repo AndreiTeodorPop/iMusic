@@ -94,7 +94,7 @@ struct SavedSongsView: View {
                     track: track,
                     isCurrent: isCurrent,
                     playlists: library.playlists,
-                    onTap: { player.play(track: track) },
+                    onTap: { player.play(track: track, queue: library.tracks) },
                     onAddToPlaylist: { playlist in
                         library.addTrack(track, to: playlist)
                         showToast("Added to \"\(playlist.name)\"")

@@ -157,7 +157,10 @@ final class AudioLibrary: ObservableObject {
 
         do {
             try ensureImportDirectory()
-            let destURL = uniqueDestinationURL(forOriginal: url)
+            let destURL = importDirectory.appendingPathComponent(url.lastPathComponent)
+
+            // Skip if already in the library
+            guard !fileManager.fileExists(atPath: destURL.path) else { return }
 
             if url.standardizedFileURL != destURL.standardizedFileURL {
                 try fileManager.copyItem(at: url, to: destURL)
@@ -180,19 +183,6 @@ final class AudioLibrary: ObservableObject {
     }
 
     // MARK: - Helpers
-
-    private func uniqueDestinationURL(forOriginal url: URL) -> URL {
-        let base = importDirectory.appendingPathComponent(url.lastPathComponent)
-        if !fileManager.fileExists(atPath: base.path) { return base }
-        let name = base.deletingPathExtension().lastPathComponent
-        let ext  = base.pathExtension
-        var counter = 1
-        while true {
-            let candidate = importDirectory.appendingPathComponent("\(name) (\(counter)).\(ext)")
-            if !fileManager.fileExists(atPath: candidate.path) { return candidate }
-            counter += 1
-        }
-    }
 
     private func buildTrack(from url: URL) async -> Track {
         let asset = AVURLAsset(url: url)
