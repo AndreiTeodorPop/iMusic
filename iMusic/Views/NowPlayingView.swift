@@ -8,6 +8,7 @@ struct NowPlayingView: View {
 
     @State private var showingQueue          = false
     @State private var showingPlaylistPicker = false
+    @State private var showingDevicePicker   = false
     @State private var toast: ToastType?
     @State private var toastTask: Task<Void, Never>?
 
@@ -120,6 +121,18 @@ struct NowPlayingView: View {
 
                 // Add to Playlist
                 addToPlaylistButton
+
+                Spacer()
+
+                // Cast
+                Button { showingDevicePicker = true } label: {
+                    Image(systemName: "airplayaudio")
+                        .font(.title3)
+                        .foregroundStyle(.primary)
+                }
+                .sheet(isPresented: $showingDevicePicker) {
+                    DevicePickerSheet()
+                }
 
                 Spacer()
 
@@ -268,3 +281,76 @@ private struct QueueSheet: View {
         .presentationDragIndicator(.visible)
     }
 }
+// MARK: - Device Picker Sheet
+
+private struct DevicePickerSheet: View {
+    @EnvironmentObject var player: AudioPlayer
+    @Environment(\.dismiss) var dismiss
+
+    struct CastDevice: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let isConnected: Bool
+    }
+
+    // Try to reflect available devices from player if such API exists; otherwise mock
+    private var devices: [CastDevice] {
+        // If your AudioPlayer exposes `availableCastDevices` and `currentCastDevice`, map them here.
+        // This fallback provides a harmless mock list for UI wiring.
+        if let any = (player as AnyObject) as? NSObject, any.responds(to: Selector(("availableCastDevices"))) {
+            // We cannot dynamically invoke here; keep mock to avoid compile errors.
+        }
+        return [
+            CastDevice(id: "local", name: "This iPhone", isConnected: playerIsLocallyPlaying),
+            CastDevice(id: "livingroom", name: "Living Room Speaker", isConnected: false),
+            CastDevice(id: "bedroom", name: "Bedroom TV", isConnected: false)
+        ]
+    }
+
+    private var playerIsLocallyPlaying: Bool { true }
+
+    var body: some View {
+        NavigationStack {
+            List(devices) { device in
+                Button {
+                    connect(to: device)
+                } label: {
+                    HStack {
+                        Image(systemName: deviceSymbol(for: device))
+                            .foregroundStyle(.secondary)
+                        Text(device.name)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if device.isConnected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Cast To")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func deviceSymbol(for device: CastDevice) -> String {
+        if device.id == "local" { return "iphone" }
+        return "airplayaudio"
+    }
+
+    private func connect(to device: CastDevice) {
+        // If your AudioPlayer has connect/disconnect APIs, call them here.
+        // Example:
+        // player.connectToCastDevice(id: device.id)
+        // For now, dismiss after selection. Replace with real connection handling.
+        dismiss()
+    }
+}
+
