@@ -49,8 +49,12 @@ private func parseISO8601Duration(_ s: String) -> TimeInterval {
 // MARK: - YouTube Data API v3 Search
 
 struct YouTubeService {
-    // Paste your API key here
-    private static let apiKey = "AIzaSyAF6XpmUJIiJASAGzOJmGXiqd9GNTb8g-g"
+    private static let apiKey: String = {
+        guard let key = Bundle.main.infoDictionary?["YoutubeAPIKey"] as? String, !key.isEmpty else {
+            fatalError("YoutubeAPIKey not found in Info.plist")
+        }
+        return key
+    }()
     private static let base   = "https://www.googleapis.com/youtube/v3"
 
     // Search returns up to 10 results with snippet
