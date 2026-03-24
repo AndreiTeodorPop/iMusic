@@ -200,9 +200,10 @@ struct YouTubeSearchView: View {
                 // Mark as downloading when row kicks off the request
                 .onChange(of: downloadingIDs.contains(result.id)) { }
             }
-            .navigationTitle("YouTube")
+            .navigationTitle("Search")
             .searchable(text: $query, prompt: "Search songs, artists…")
             .onSubmit(of: .search) { Task { await performSearch() } }
+            .scrollIndicators(.visible)
             .overlay { overlayView }
             .overlay(alignment: .bottom) { toastOverlay }
         }

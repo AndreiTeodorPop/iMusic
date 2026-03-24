@@ -27,7 +27,7 @@ struct ContentView: View {
                     .tabItem { Label("Home", systemImage: "house") }
 
                 YouTubeSearchView(library: library)
-                    .tabItem { Label("YouTube", systemImage: "play.rectangle") }
+                    .tabItem { Label("Search", systemImage: "magnifyingglass") }
 
                 libraryTab
                     .tabItem { Label("Library", systemImage: "music.note.list") }
