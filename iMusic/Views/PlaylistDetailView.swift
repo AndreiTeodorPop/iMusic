@@ -8,6 +8,7 @@ struct PlaylistDetailView: View {
 
     @State private var showingAddSongs = false
     @State private var showingDeleteConfirmation = false
+    @State private var searchText = ""
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Live lookup (never stale)
@@ -26,6 +27,14 @@ struct PlaylistDetailView: View {
         return library.tracks.filter { !playlist.trackIDs.contains($0.id) }
     }
 
+    private var filteredTracksInPlaylist: [Track] {
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return tracksInPlaylist }
+        let q = searchText.lowercased()
+        return tracksInPlaylist.filter {
+            $0.title.lowercased().contains(q) || ($0.artist?.lowercased().contains(q) == true)
+        }
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -37,7 +46,7 @@ struct PlaylistDetailView: View {
                     }
 
                     Section {
-                        ForEach(tracksInPlaylist) { track in
+                        ForEach(filteredTracksInPlaylist) { track in
                             trackRow(for: track)
                         }
                         .onDelete(perform: removeRows)
@@ -45,6 +54,7 @@ struct PlaylistDetailView: View {
                 }
                 .navigationTitle(playlist.name)
                 .navigationBarTitleDisplayMode(.inline)
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search in playlist…")
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         HStack {
@@ -78,6 +88,8 @@ struct PlaylistDetailView: View {
                 .overlay {
                     if tracksInPlaylist.isEmpty {
                         emptyStateView(playlistName: playlist.name)
+                    } else if filteredTracksInPlaylist.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
                     }
                 }
                 .sheet(isPresented: $showingAddSongs) {
@@ -117,7 +129,7 @@ struct PlaylistDetailView: View {
                 }
 
                 Button {
-                    player.playAll(tracks: tracksInPlaylist)
+                    player.playAll(tracks: tracksInPlaylist, playlistName: playlist.name)
                 } label: {
                     Label("Play All", systemImage: "play.circle.fill")
                         .font(.headline)
@@ -157,7 +169,7 @@ struct PlaylistDetailView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            player.play(track: track, queue: tracksInPlaylist)
+            player.play(track: track, queue: tracksInPlaylist, playlistName: playlist?.name)
         }
     }
 
@@ -181,7 +193,7 @@ struct PlaylistDetailView: View {
     private func removeRows(at offsets: IndexSet) {
         guard let playlist else { return }
         for index in offsets {
-            let track = tracksInPlaylist[index]
+            let track = filteredTracksInPlaylist[index]
             library.removeTrack(track, from: playlist)
         }
     }

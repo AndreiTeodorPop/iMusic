@@ -167,6 +167,7 @@ struct YouTubeSearchView: View {
     @State private var downloadedIDs:  Set<String> = []
     @State private var toast: ToastType?             = nil
     @State private var toastTask: Task<Void, Never>?
+    @State private var searchTask: Task<Void, Never>?
 
     @ObservedObject var library: AudioLibrary
 
@@ -198,7 +199,18 @@ struct YouTubeSearchView: View {
             }
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Search songs, artists…")
-            .onSubmit(of: .search) { Task { await performSearch() } }
+            .onChange(of: query) { _, newValue in
+                searchTask?.cancel()
+                guard !newValue.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    results = []
+                    return
+                }
+                searchTask = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled else { return }
+                    await performSearch()
+                }
+            }
             .scrollIndicators(.visible)
             .overlay { overlayView }
             .overlay(alignment: .bottom) { toastOverlay }

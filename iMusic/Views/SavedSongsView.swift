@@ -75,16 +75,25 @@ struct SavedSongsView: View {
 
     @State private var toast: ToastType?
     @State private var toastTask: Task<Void, Never>?
+    @State private var searchText = ""
+
+    private var filteredTracks: [Track] {
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return library.tracks }
+        let q = searchText.lowercased()
+        return library.tracks.filter {
+            $0.title.lowercased().contains(q) || ($0.artist?.lowercased().contains(q) == true)
+        }
+    }
 
     var body: some View {
         List {
-            ForEach(library.tracks, id: \.id) { track in
+            ForEach(filteredTracks, id: \.id) { track in
                 let isCurrent = (player.currentTrack?.id == track.id)
                 SavedTrackRow(
                     track: track,
                     isCurrent: isCurrent,
                     library: library,
-                    onTap: { player.play(track: track, queue: library.tracks) },
+                    onTap: { player.play(track: track, queue: filteredTracks) },
                     onAddToPlaylist: { playlist in
                         library.addTrack(track, to: playlist)
                         showToast(.success("Added to \"\(playlist.name)\""))
@@ -93,7 +102,7 @@ struct SavedSongsView: View {
             }
             .onDelete { indexSet in
                 for index in indexSet {
-                    let track = library.tracks[index]
+                    let track = filteredTracks[index]
                     if player.currentTrack?.id == track.id { player.stop() }
                     Task { await library.deleteTrack(track) }
                 }
@@ -101,10 +110,11 @@ struct SavedSongsView: View {
         }
         .navigationTitle("Saved Songs")
         .navigationBarTitleDisplayMode(.large)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search songs…")
         .toolbar {
             if !library.tracks.isEmpty {
                 Button {
-                    player.playAll(tracks: library.tracks)
+                    player.playAll(tracks: filteredTracks)
                 } label: {
                     Label("Play All", systemImage: "play.circle.fill")
                 }
@@ -117,6 +127,8 @@ struct SavedSongsView: View {
                     systemImage: "music.note",
                     description: Text("Tap the import button to add songs from your device")
                 )
+            } else if filteredTracks.isEmpty {
+                ContentUnavailableView.search(text: searchText)
             }
         }
         .overlay(alignment: .bottom) {

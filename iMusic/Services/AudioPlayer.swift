@@ -13,6 +13,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var currentTrack: Track?
     @Published var isExpanded: Bool = false
     @Published var isShuffled: Bool = false
+    @Published private(set) var currentPlaylistName: String? = nil
 
     private var player: AVAudioPlayer?
     private var timer: Timer?
@@ -235,9 +236,10 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         updateNowPlayingInfo()
     }
 
-    func playAll(tracks: [Track]) {
+    func playAll(tracks: [Track], playlistName: String? = nil) {
         guard !tracks.isEmpty else { return }
         clearYouTubeQueue()
+        currentPlaylistName = playlistName
         originalQueue = tracks
         playlistQueue = isShuffled ? tracks.shuffled() : tracks
         currentIndex = 0
@@ -245,8 +247,9 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     /// Plays a single track while setting the full queue for next/previous navigation.
-    func play(track: Track, queue: [Track]) {
+    func play(track: Track, queue: [Track], playlistName: String? = nil) {
         clearYouTubeQueue()
+        currentPlaylistName = playlistName
         originalQueue = queue
         playlistQueue = isShuffled ? queue.shuffled() : queue
         currentIndex = playlistQueue.firstIndex(where: { $0.id == track.id }) ?? 0

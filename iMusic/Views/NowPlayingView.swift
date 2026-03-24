@@ -32,9 +32,16 @@ struct NowPlayingView: View {
                         .clipShape(Circle())
                 }
                 Spacer()
-                Text("Now Playing")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 3) {
+                    Text("Now Playing")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    if let name = player.currentPlaylistName {
+                        Label(name, systemImage: "music.note.list")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Spacer()
                 Color.clear.frame(width: 44, height: 44)
             }

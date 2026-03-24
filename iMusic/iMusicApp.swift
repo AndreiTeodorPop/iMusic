@@ -11,16 +11,31 @@ import SwiftUI
 struct iMusicApp: App {
     @StateObject private var sharedPlayer = AudioPlayer()
     @StateObject private var themeManager = ThemeManager()
+    @State private var showSplash = true
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(sharedPlayer)
-                .environmentObject(themeManager)
-                .tint(themeManager.current.accent)
-                .task { @MainActor in
-                    sharedPlayer.configureAudioSession()
+            ZStack {
+                ContentView()
+                    .environmentObject(sharedPlayer)
+                    .environmentObject(themeManager)
+                    .tint(themeManager.current.accent)
+                    .task { @MainActor in
+                        sharedPlayer.configureAudioSession()
+                    }
+
+                if showSplash {
+                    SplashView()
+                        .transition(.opacity)
+                        .zIndex(1)
+                        .task {
+                            try? await Task.sleep(for: .milliseconds(1800))
+                            withAnimation(.easeOut(duration: 0.5)) {
+                                showSplash = false
+                            }
+                        }
                 }
+            }
         }
     }
 }
