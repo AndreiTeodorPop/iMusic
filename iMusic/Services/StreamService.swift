@@ -2,8 +2,7 @@ import Foundation
 
 struct StreamService {
 
-    // Replace with your deployed server URL (e.g. https://your-app.railway.app)
-    static let baseURL = "http://192.168.1.11:8080"
+    static let baseURL = "https://imusic-production.up.railway.app"
 
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
