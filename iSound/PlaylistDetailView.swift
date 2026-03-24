@@ -6,6 +6,8 @@ struct PlaylistDetailView: View {
     @ObservedObject var library: AudioLibrary
     @EnvironmentObject var player: AudioPlayer
 
+    @State private var showingAddSongs = false
+
     // MARK: - Live lookup (never stale)
 
     private var playlist: Playlist? {
@@ -15,6 +17,11 @@ struct PlaylistDetailView: View {
     private var tracksInPlaylist: [Track] {
         guard let playlist else { return [] }
         return library.tracks.filter { playlist.trackIDs.contains($0.id) }
+    }
+
+    private var tracksNotInPlaylist: [Track] {
+        guard let playlist else { return [] }
+        return library.tracks.filter { !playlist.trackIDs.contains($0.id) }
     }
 
     // MARK: - Body
@@ -38,13 +45,26 @@ struct PlaylistDetailView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        EditButton()
+                        HStack {
+                            Button {
+                                showingAddSongs = true
+                            } label: {
+                                Image(systemName: "plus")
+                            }
+                            EditButton()
+                        }
                     }
                 }
                 .overlay {
                     if tracksInPlaylist.isEmpty {
                         emptyStateView(playlistName: playlist.name)
                     }
+                }
+                .sheet(isPresented: $showingAddSongs) {
+                    AddSongsSheet(
+                        tracks: tracksNotInPlaylist,
+                        onAdd: { track in library.addTrack(track, to: playlist) }
+                    )
                 }
             } else {
                 // Playlist was deleted while this view was on screen
@@ -117,7 +137,7 @@ struct PlaylistDetailView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            player.play(track: track)
+            player.play(track: track, queue: tracksInPlaylist)
         }
     }
 
@@ -125,7 +145,14 @@ struct PlaylistDetailView: View {
         ContentUnavailableView {
             Label("No songs yet", systemImage: "music.note.list")
         } description: {
-            Text("Go to Saved Songs and tap + next to any track to add it to \(playlistName).")
+            Text("Add songs from your library to get started.")
+        } actions: {
+            Button {
+                showingAddSongs = true
+            } label: {
+                Label("Add Songs", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -136,6 +163,68 @@ struct PlaylistDetailView: View {
         for index in offsets {
             let track = tracksInPlaylist[index]
             library.removeTrack(track, from: playlist)
+        }
+    }
+}
+
+// MARK: - Add Songs Sheet
+
+private struct AddSongsSheet: View {
+    let tracks: [Track]
+    let onAdd: @MainActor (Track) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var added: Set<UUID> = []
+
+    var body: some View {
+        NavigationStack {
+            List(tracks, id: \.id) { track in
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.2))
+                        .frame(width: 40, height: 40)
+                        .overlay(Image(systemName: "music.note").foregroundStyle(.secondary))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.title).font(.headline).lineLimit(1)
+                        Text(track.artist ?? "Unknown Artist")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if added.contains(track.id) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Button {
+                            onAdd(track)
+                            added.insert(track.id)
+                        } label: {
+                            Image(systemName: "plus.circle")
+                                .font(.title3)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Add Songs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .overlay {
+                if tracks.isEmpty {
+                    ContentUnavailableView(
+                        "No songs to add",
+                        systemImage: "music.note",
+                        description: Text("All saved songs are already in this playlist.")
+                    )
+                }
+            }
         }
     }
 }

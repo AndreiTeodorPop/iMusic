@@ -11,9 +11,13 @@ import SwiftUI
 private struct SavedTrackRow: View {
     let track: Track
     let isCurrent: Bool
-    let playlists: [Playlist]
+    @ObservedObject var library: AudioLibrary
     let onTap: () -> Void
     let onAddToPlaylist: (Playlist) -> Void
+
+    private var eligiblePlaylists: [Playlist] {
+        library.playlists.filter { !$0.trackIDs.contains(track.id) }
+    }
 
     @State private var showingPlaylistPicker = false
 
@@ -56,13 +60,13 @@ private struct SavedTrackRow: View {
                     .frame(width: 36, height: 36) // larger tap target
             }
             .buttonStyle(.plain) // prevents the whole row from highlighting
-            .disabled(playlists.isEmpty)
+            .disabled(eligiblePlaylists.isEmpty)
             .confirmationDialog(
                 "Add \"\(track.title)\" to playlist",
                 isPresented: $showingPlaylistPicker,
                 titleVisibility: .visible
             ) {
-                ForEach(playlists) { playlist in
+                ForEach(eligiblePlaylists) { playlist in
                     Button(playlist.name) {
                         onAddToPlaylist(playlist)
                     }
@@ -93,7 +97,7 @@ struct SavedSongsView: View {
                 SavedTrackRow(
                     track: track,
                     isCurrent: isCurrent,
-                    playlists: library.playlists,
+                    library: library,
                     onTap: { player.play(track: track, queue: library.tracks) },
                     onAddToPlaylist: { playlist in
                         library.addTrack(track, to: playlist)

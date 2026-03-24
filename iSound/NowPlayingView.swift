@@ -170,20 +170,26 @@ struct NowPlayingView: View {
 
     // MARK: - Add to Playlist Button
 
+    private var eligiblePlaylists: [Playlist] {
+        guard let track = player.currentTrack else { return [] }
+        let targetTrack = library.tracks.first { $0.title == track.title } ?? track
+        return library.playlists.filter { !$0.trackIDs.contains(targetTrack.id) }
+    }
+
     @ViewBuilder
     private var addToPlaylistButton: some View {
         Button { showingPlaylistPicker = true } label: {
             Image(systemName: "plus.circle")
                 .font(.title3)
-                .foregroundStyle(library.playlists.isEmpty ? .secondary : .primary)
+                .foregroundStyle(eligiblePlaylists.isEmpty ? .secondary : .primary)
         }
-        .disabled(library.playlists.isEmpty || player.currentTrack == nil)
+        .disabled(eligiblePlaylists.isEmpty || player.currentTrack == nil)
         .confirmationDialog(
             "Add to Playlist",
             isPresented: $showingPlaylistPicker,
             titleVisibility: .visible
         ) {
-            ForEach(library.playlists) { playlist in
+            ForEach(eligiblePlaylists) { playlist in
                 Button(playlist.name) {
                     guard let track = player.currentTrack else { return }
                     let targetTrack = library.tracks.first { $0.title == track.title } ?? track
