@@ -11,6 +11,13 @@ struct StreamService {
         return URLSession(configuration: config)
     }()
 
+    private static let downloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest  = 120
+        config.timeoutIntervalForResource = 300
+        return URLSession(configuration: config)
+    }()
+
     struct StreamResponse: Decodable {
         let url: String
         let title: String
@@ -38,7 +45,7 @@ struct StreamService {
             throw StreamError.invalidURL
         }
 
-        let (tempURL, response) = try await session.download(from: url)
+        let (tempURL, response) = try await downloadSession.download(from: url)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw StreamError.downloadFailed
         }

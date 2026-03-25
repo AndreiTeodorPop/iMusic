@@ -49,6 +49,7 @@ private struct YouTubeResultRow: View {
     let isDownloading: Bool
     let isDownloaded: Bool
     let onPlay: () -> Void
+    let onDownloadStarted: () -> Void
     let onDownloaded: (URL) -> Void
     let onDownloadError: (Error) -> Void
 
@@ -141,6 +142,7 @@ private struct YouTubeResultRow: View {
     }
 
     private func startDownload() async {
+        onDownloadStarted()
         do {
             let tempURL = try await StreamService.downloadAudioToTemp(
                 for: result.id,
@@ -175,28 +177,8 @@ struct YouTubeSearchView: View {
     var body: some View {
         NavigationStack {
             List(results) { result in
-                YouTubeResultRow(
-                    result: result,
-                    isStreaming:    isLoadingID == result.id,
-                    isCurrentTrack: player.currentTrack?.youtubeVideoID == result.id,
-                    isDownloading:  downloadingIDs.contains(result.id),
-                    isDownloaded:   downloadedIDs.contains(result.id),
-                    onPlay:  { Task { await playResult(result) } },
-                    onDownloaded: { savedURL in
-                        withAnimation {
-                            downloadingIDs.remove(result.id)
-                            downloadedIDs.insert(result.id)
-                        }
-                        Task { await library.reloadAfterDownload() }
-                        showToast(.success("Saved to \"\(savedURL.deletingLastPathComponent().lastPathComponent)\""))
-                    },
-                    onDownloadError: { error in
-                        _ = withAnimation { downloadingIDs.remove(result.id) }
-                        showToast(.error(error.localizedDescription))
-                    },
-                    library: library
-                )
-                .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                resultRow(result)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
             }
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Search songs, artists…")
@@ -206,7 +188,7 @@ struct YouTubeSearchView: View {
                     results = []
                     return
                 }
-                searchTask = Task {
+                searchTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled else { return }
                     await performSearch()
@@ -219,9 +201,43 @@ struct YouTubeSearchView: View {
                 IntentBridge.shared.pendingYouTubeSearch = nil
                 query = searchQuery
                 searchTask?.cancel()
-                searchTask = Task { await performSearch() }
+                searchTask = Task { @MainActor in
+                    await performSearch()
+                }
             }
         }
+    }
+
+    // MARK: - Row Builder
+
+    @ViewBuilder
+    private func resultRow(_ result: YouTubeResult) -> some View {
+        YouTubeResultRow(
+            result: result,
+            isStreaming:       isLoadingID == result.id,
+            isCurrentTrack:    player.currentTrack?.youtubeVideoID == result.id,
+            isDownloading:     downloadingIDs.contains(result.id),
+            isDownloaded:      downloadedIDs.contains(result.id),
+            onPlay: {
+                Task { await playResult(result) }
+            },
+            onDownloadStarted: {
+                withAnimation { _ = downloadingIDs.insert(result.id) }
+            },
+            onDownloaded: { savedURL in
+                withAnimation {
+                    downloadingIDs.remove(result.id)
+                    _ = downloadedIDs.insert(result.id)
+                }
+                Task { await library.reloadAfterDownload() }
+                showToast(.success("Saved to \"\(savedURL.deletingLastPathComponent().lastPathComponent)\""))
+            },
+            onDownloadError: { error in
+                _ = withAnimation { downloadingIDs.remove(result.id) }
+                showToast(.error(error.localizedDescription))
+            },
+            library: library
+        )
     }
 
     // MARK: - Stream Action
@@ -277,7 +293,7 @@ struct YouTubeSearchView: View {
     private func showToast(_ type: ToastType) {
         toastTask?.cancel()
         withAnimation(.spring(response: 0.3)) { toast = type }
-        toastTask = Task {
+        toastTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut) { toast = nil }
