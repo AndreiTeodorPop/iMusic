@@ -1,26 +1,28 @@
 import SwiftUI
 
-struct PlaylistSortSheetView: View {
-    @Binding var sortOrder: ContentView.PlaylistSortOrder
+struct SortSheetView<T: CaseIterable & Hashable>: View where T.AllCases: RandomAccessCollection {
+    let title: String
+    @Binding var selection: T
     @Binding var isPresented: Bool
+    let labelFor: (T) -> String
     @EnvironmentObject private var themeManager: ThemeManager
 
     var body: some View {
         VStack(spacing: 10) {
-            Text("Sort playlists")
+            Text(title)
                 .font(.headline)
                 .foregroundStyle(.primary)
                 .padding(.top, 16)
                 .padding(.bottom, 4)
 
-            ForEach(ContentView.PlaylistSortOrder.allCases, id: \.self) { option in
+            ForEach(Array(T.allCases), id: \.self) { option in
                 Button {
                     withAnimation(.spring()) {
-                        sortOrder = option
+                        selection = option
                         isPresented = false
                     }
                 } label: {
-                    Text(option.label)
+                    Text(labelFor(option))
                         .font(.body).fontWeight(.semibold)
                         .foregroundStyle(themeManager.current.accent)
                         .frame(maxWidth: .infinity)

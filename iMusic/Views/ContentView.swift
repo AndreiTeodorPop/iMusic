@@ -27,7 +27,6 @@ struct ContentView: View {
     @EnvironmentObject private var themeManager: ThemeManager
 
     @State private var searchText: String = ""
-    @State private var showingImporter = false
     @State private var showingPlaylistAlert = false
     @State private var newPlaylistName = ""
     @State private var showingThemePicker = false
@@ -121,20 +120,6 @@ struct ContentView: View {
                 }
             }
         }
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: [.audio],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                for url in urls {
-                    library.importTrack(from: url)
-                }
-            case .failure(let error):
-                print("Import failed: \(error.localizedDescription)")
-            }
-        }
     }
 
     // MARK: - Tabs
@@ -221,7 +206,7 @@ struct ContentView: View {
                     Color.black.opacity(0.4)
                         .ignoresSafeArea()
                         .onTapGesture { withAnimation(.spring()) { showingSortSheet = false } }
-                    PlaylistSortSheetView(sortOrder: $playlistSortOrder, isPresented: $showingSortSheet)
+                    SortSheetView(title: "Sort Playlists", selection: $playlistSortOrder, isPresented: $showingSortSheet) { $0.label }
                         .transition(.scale(scale: 0.9).combined(with: .opacity))
                         .padding(.horizontal, 24)
                 }
@@ -259,11 +244,6 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button { showingImporter = true } label: {
-                        Image(systemName: "icloud.and.arrow.down")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
                 }
                 .foregroundStyle(.primary)
             }

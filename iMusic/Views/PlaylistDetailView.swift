@@ -1,17 +1,33 @@
 import SwiftUI
 
 struct PlaylistDetailView: View {
-    // Store only the ID — never the struct itself — so we always read live data
     let playlistID: UUID
     @ObservedObject var library: AudioLibrary
     @EnvironmentObject var player: AudioPlayer
+    @EnvironmentObject private var themeManager: ThemeManager
 
     @State private var showingAddSongs = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingSortSheet = false
+    @State private var sortOrder: TrackSortOrder = .default
     @State private var searchText = ""
+
     @Environment(\.dismiss) private var dismiss
 
-    // MARK: - Live lookup (never stale)
+    enum TrackSortOrder: CaseIterable {
+        case `default`, titleAZ, titleZA, artist
+
+        var label: String {
+            switch self {
+            case .default: return "Default"
+            case .titleAZ: return "Title (A–Z)"
+            case .titleZA: return "Title (Z–A)"
+            case .artist:  return "Artist"
+            }
+        }
+    }
+
+    // MARK: - Live lookup
 
     private var playlist: Playlist? {
         library.playlists.first { $0.id == playlistID }
@@ -27,10 +43,19 @@ struct PlaylistDetailView: View {
         return library.tracks.filter { !playlist.trackIDs.contains($0.id) }
     }
 
+    private var sortedTracksInPlaylist: [Track] {
+        switch sortOrder {
+        case .default: return tracksInPlaylist
+        case .titleAZ: return tracksInPlaylist.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .titleZA: return tracksInPlaylist.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        case .artist:  return tracksInPlaylist.sorted { ($0.artist ?? "").localizedCaseInsensitiveCompare($1.artist ?? "") == .orderedAscending }
+        }
+    }
+
     private var filteredTracksInPlaylist: [Track] {
-        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return tracksInPlaylist }
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return sortedTracksInPlaylist }
         let q = searchText.lowercased()
-        return tracksInPlaylist.filter {
+        return sortedTracksInPlaylist.filter {
             $0.title.lowercased().contains(q) || ($0.artist?.lowercased().contains(q) == true)
         }
     }
@@ -40,35 +65,106 @@ struct PlaylistDetailView: View {
     var body: some View {
         Group {
             if let playlist {
-                List {
-                    if !tracksInPlaylist.isEmpty {
-                        headerSection(playlist: playlist)
-                    }
+                ZStack {
+                ScrollView {
 
-                    Section {
-                        ForEach(filteredTracksInPlaylist) { track in
-                            trackRow(for: track)
-                        }
-                        .onDelete(perform: removeRows)
-                    }
-                }
-                .navigationTitle(playlist.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search in playlist…")
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        HStack {
+                    // Info + buttons
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top) {
+                            Text(playlist.name)
+                                .font(.largeTitle).bold()
+                            Spacer()
                             Button {
-                                showingAddSongs = true
-                            } label: {
-                                Image(systemName: "plus")
-                            }
-                            EditButton()
-                            Button(role: .destructive) {
                                 showingDeleteConfirmation = true
                             } label: {
-                                Image(systemName: "trash")
+                                Image(systemName: "heart.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(themeManager.current.accent)
                             }
+                        }
+
+                        HStack(spacing: 6) {
+                            Image(systemName: "person.circle.fill")
+                                .foregroundStyle(.secondary)
+                            Text("\(tracksInPlaylist.count) songs")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        // Shuffle
+                        Button {
+                            player.playAll(tracks: tracksInPlaylist.shuffled(), playlistName: playlist.name)
+                        } label: {
+                            Text("SHUFFLE")
+                                .font(.headline).bold()
+                                .foregroundStyle(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .background(
+                                    LinearGradient(
+                                        colors: [themeManager.current.accent, themeManager.current.secondaryAccent],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .clipShape(Capsule())
+                        }
+
+                        // Add Songs
+                        Button { showingAddSongs = true } label: {
+                            Text("ADD SONGS")
+                                .font(.subheadline).bold()
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .overlay(Capsule().stroke(Color.primary.opacity(0.4), lineWidth: 1.5))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+
+                    Divider().padding(.horizontal)
+
+                    // Track list
+                    if tracksInPlaylist.isEmpty {
+                        ContentUnavailableView {
+                            Label("No songs yet", systemImage: "music.note.list")
+                        } description: {
+                            Text("Tap Add Songs to get started.")
+                        }
+                        .padding(.top, 40)
+                    } else if filteredTracksInPlaylist.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                            .padding(.top, 40)
+                    } else {
+                        LazyVStack(spacing: 0) {
+                            ForEach(filteredTracksInPlaylist) { track in
+                                trackRow(for: track, playlist: playlist)
+                                Divider().padding(.leading, 16)
+                            }
+                        }
+                    }
+                }
+
+                // Sort overlay — topmost layer
+                if showingSortSheet {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation(.spring()) { showingSortSheet = false } }
+                    SortSheetView(title: "Sort Songs", selection: $sortOrder, isPresented: $showingSortSheet) { $0.label }
+                        .padding(.horizontal, 24)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                }
+                } // end ZStack
+                .animation(.spring(), value: showingSortSheet)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showingSortSheet = true } label: {
+                            Image(systemName: "line.3.horizontal.decrease")
+                                .fontWeight(.semibold)
                         }
                     }
                 }
@@ -85,13 +181,6 @@ struct PlaylistDetailView: View {
                 } message: {
                     Text("This will remove the playlist but won't delete your songs.")
                 }
-                .overlay {
-                    if tracksInPlaylist.isEmpty {
-                        emptyStateView(playlistName: playlist.name)
-                    } else if filteredTracksInPlaylist.isEmpty {
-                        ContentUnavailableView.search(text: searchText)
-                    }
-                }
                 .sheet(isPresented: $showingAddSongs) {
                     AddSongsSheet(
                         tracks: tracksNotInPlaylist,
@@ -99,103 +188,68 @@ struct PlaylistDetailView: View {
                     )
                 }
             } else {
-                // Playlist was deleted while this view was on screen
                 ContentUnavailableView("Playlist not found", systemImage: "music.note.list")
             }
         }
     }
 
-    // MARK: - Subviews
+    // MARK: - Track Row
 
-    private func headerSection(playlist: Playlist) -> some View {
-        Section {
-            VStack(spacing: 16) {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.accentColor.gradient)
-                    .frame(width: 160, height: 160)
-                    .shadow(radius: 10)
-                    .overlay(
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 60))
-                            .foregroundColor(.white)
-                    )
+    private func trackRow(for track: Track, playlist: Playlist) -> some View {
+        PlaylistTrackRow(
+            track: track,
+            isCurrent: player.currentTrack?.id == track.id,
+            onTap: { player.play(track: track, queue: tracksInPlaylist, playlistName: playlist.name) },
+            onRemove: { library.removeTrack(track, from: playlist) }
+        )
+    }
+}
 
-                VStack(spacing: 4) {
-                    Text(playlist.name)
-                        .font(.title2.bold())
-                    Text("\(tracksInPlaylist.count) songs")
+// MARK: - Track Row
+
+private struct PlaylistTrackRow: View {
+    let track: Track
+    let isCurrent: Bool
+    let onTap: () -> Void
+    let onRemove: () -> Void
+
+    @State private var showingOptions = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(track.title)
+                    .font(.body).fontWeight(.semibold)
+                    .lineLimit(1)
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
+                HStack(spacing: 5) {
+                    if isCurrent {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                    }
+                    Text(track.artist ?? "Unknown artist")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-
-                Button {
-                    player.playAll(tracks: tracksInPlaylist, playlistName: playlist.name)
-                } label: {
-                    Label("Play All", systemImage: "play.circle.fill")
-                        .font(.headline)
-                        .padding(.horizontal, 20)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.large)
             }
-            .frame(maxWidth: .infinity)
-            .listRowBackground(Color.clear)
-        }
-    }
-
-    private func trackRow(for track: Track) -> some View {
-        HStack(spacing: 12) {
-            if player.currentTrack?.id == track.id {
-                Image(systemName: "speaker.wave.3.fill")
-                    .foregroundStyle(.green)
-                    .frame(width: 24)
-            } else {
-                Image(systemName: "music.note")
+            Spacer(minLength: 0)
+            Button { showingOptions = true } label: {
+                Image(systemName: "ellipsis")
                     .foregroundStyle(.secondary)
-                    .frame(width: 24)
+                    .frame(width: 36, height: 36)
             }
-
-            VStack(alignment: .leading) {
-                Text(track.title)
-                    .font(.headline)
-                    .foregroundStyle(player.currentTrack?.id == track.id ? .green : .primary)
-                Text(track.artist ?? "Unknown Artist")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            .confirmationDialog(track.title, isPresented: $showingOptions, titleVisibility: .visible) {
+                Button("Remove from Playlist", role: .destructive) { onRemove() }
+                Button("Cancel", role: .cancel) {}
             }
-
-            Spacer()
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            player.play(track: track, queue: tracksInPlaylist, playlistName: playlist?.name)
-        }
-    }
-
-    private func emptyStateView(playlistName: String) -> some View {
-        ContentUnavailableView {
-            Label("No songs yet", systemImage: "music.note.list")
-        } description: {
-            Text("Add songs from your library to get started.")
-        } actions: {
-            Button {
-                showingAddSongs = true
-            } label: {
-                Label("Add Songs", systemImage: "plus.circle.fill")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-    }
-
-    // MARK: - Actions
-
-    private func removeRows(at offsets: IndexSet) {
-        guard let playlist else { return }
-        for index in offsets {
-            let track = filteredTracksInPlaylist[index]
-            library.removeTrack(track, from: playlist)
-        }
+        .onTapGesture(perform: onTap)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
     }
 }
 
@@ -212,16 +266,12 @@ private struct AddSongsSheet: View {
         NavigationStack {
             List(tracks, id: \.id) { track in
                 HStack(spacing: 12) {
-                    TrackArtworkView(size: 40)
-
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track.title).font(.headline).lineLimit(1)
                         Text(track.artist ?? "Unknown Artist")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-
                     Spacer()
-
                     if added.contains(track.id) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
@@ -262,9 +312,7 @@ private struct PlaylistDetailPreview: View {
     private let library = AudioLibrary()
     private let playlistID: UUID
 
-    init() {
-        playlistID = UUID()
-    }
+    init() { playlistID = UUID() }
 
     var body: some View {
         NavigationStack {
@@ -274,6 +322,4 @@ private struct PlaylistDetailPreview: View {
     }
 }
 
-#Preview {
-    PlaylistDetailPreview()
-}
+#Preview { PlaylistDetailPreview() }
