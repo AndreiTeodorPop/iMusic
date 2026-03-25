@@ -51,7 +51,14 @@ struct StreamService {
         }
 
         let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
-        let ext = contentType.contains("mp4") ? "m4a" : "webm"
+        let ext: String
+        if contentType.contains("mpeg") || contentType.contains("mp3") {
+            ext = "mp3"
+        } else if contentType.contains("mp4") {
+            ext = "m4a"
+        } else {
+            ext = "mp3"
+        }
 
         let sanitized = title
             .replacingOccurrences(of: "/",  with: "-")

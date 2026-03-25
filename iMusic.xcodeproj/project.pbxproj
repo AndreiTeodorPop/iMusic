@@ -11,7 +11,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		758E875C2F720C8200390DA8 /* Exceptions for "iMusic" folder in "iMusic" target */ = {
+		756587C12F748075001A0566 /* Exceptions for "iMusic" folder in "iMusic" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -24,7 +24,7 @@
 		756BD4A12F65FB1300D9056A /* iMusic */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				758E875C2F720C8200390DA8 /* Exceptions for "iMusic" folder in "iMusic" target */,
+				756587C12F748075001A0566 /* Exceptions for "iMusic" folder in "iMusic" target */,
 			);
 			path = iMusic;
 			sourceTree = "<group>";
@@ -272,6 +272,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iMusic/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = iMusic;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSSiriUsageDescription = "iMusic uses Siri so you can search for songs and play playlists with your voice.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -309,6 +310,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iMusic/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = iMusic;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSSiriUsageDescription = "iMusic uses Siri so you can search for songs and play playlists with your voice.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
