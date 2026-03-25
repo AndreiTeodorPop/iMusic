@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Row
 
@@ -8,62 +9,108 @@ private struct SavedTrackRow: View {
     @ObservedObject var library: AudioLibrary
     let onTap: () -> Void
     let onAddToPlaylist: (Playlist) -> Void
+    let onDelete: () -> Void
 
     private var eligiblePlaylists: [Playlist] {
         library.playlists.filter { !$0.trackIDs.contains(track.id) }
     }
 
-    @State private var showingPlaylistPicker = false
+    @State private var showingOptions = false
 
     var body: some View {
         HStack(spacing: 12) {
-            TrackArtworkView(size: 44)
-
-            // Title + artist
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(track.title)
-                    .font(.headline)
+                    .font(.body).fontWeight(.semibold)
                     .lineLimit(1)
-                Text(track.artist ?? "Unknown Artist")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
+                HStack(spacing: 5) {
+                    if isCurrent {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                    }
+                    Text(track.artist ?? "Unknown artist")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
-
             Spacer(minLength: 0)
-
-            // Playing indicator
-            if isCurrent {
-                Image(systemName: "waveform")
-                    .foregroundStyle(.tint)
-            }
-
-            // Add to playlist button
-            Button {
-                showingPlaylistPicker = true
-            } label: {
-                Image(systemName: "plus.circle")
-                    .font(.title3)
+            Button { showingOptions = true } label: {
+                Image(systemName: "ellipsis")
                     .foregroundStyle(.secondary)
-                    .frame(width: 36, height: 36) // larger tap target
+                    .frame(width: 36, height: 36)
             }
-            .buttonStyle(.plain) // prevents the whole row from highlighting
-            .disabled(eligiblePlaylists.isEmpty)
-            .confirmationDialog(
-                "Add \"\(track.title)\" to playlist",
-                isPresented: $showingPlaylistPicker,
-                titleVisibility: .visible
-            ) {
-                ForEach(eligiblePlaylists) { playlist in
-                    Button(playlist.name) {
-                        onAddToPlaylist(playlist)
+            .buttonStyle(.plain)
+            .confirmationDialog(track.title, isPresented: $showingOptions, titleVisibility: .visible) {
+                if !eligiblePlaylists.isEmpty {
+                    Menu("Add to Playlist") {
+                        ForEach(eligiblePlaylists) { playlist in
+                            Button(playlist.name) { onAddToPlaylist(playlist) }
+                        }
                     }
                 }
+                Button("Delete", role: .destructive) { onDelete() }
                 Button("Cancel", role: .cancel) {}
             }
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-        // Context menu removed — use the + button instead
+        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
+    }
+}
+
+// MARK: - Sort Sheet
+
+private struct TrackSortSheetView: View {
+    @Binding var sortOrder: SavedSongsView.TrackSortOrder
+    @Binding var isPresented: Bool
+    @EnvironmentObject private var themeManager: ThemeManager
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Sort songs")
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .padding(.top, 16)
+                .padding(.bottom, 4)
+
+            ForEach(SavedSongsView.TrackSortOrder.allCases, id: \.self) { option in
+                Button {
+                    withAnimation(.spring()) {
+                        sortOrder = option
+                        isPresented = false
+                    }
+                } label: {
+                    Text(option.label)
+                        .font(.body).fontWeight(.semibold)
+                        .foregroundStyle(themeManager.current.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(Capsule())
+                }
+            }
+
+            Button {
+                withAnimation(.spring()) { isPresented = false }
+            } label: {
+                Text("Cancel")
+                    .font(.body).fontWeight(.semibold)
+                    .foregroundStyle(themeManager.current.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(Capsule())
+            }
+            .padding(.top, 4)
+            .padding(.bottom, 16)
+        }
+        .padding(.horizontal, 12)
+        .background(Color(.systemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 }
 
@@ -72,51 +119,131 @@ private struct SavedTrackRow: View {
 struct SavedSongsView: View {
     @ObservedObject var library: AudioLibrary
     @EnvironmentObject private var player: AudioPlayer
+    @EnvironmentObject private var themeManager: ThemeManager
 
     @State private var toast: ToastType?
     @State private var toastTask: Task<Void, Never>?
     @State private var searchText = ""
+    @State private var showingImporter = false
+    @State private var showingSortSheet = false
+    @State private var sortOrder: TrackSortOrder = .recentlyAdded
+
+    enum TrackSortOrder: CaseIterable {
+        case recentlyAdded, titleAZ, titleZA, artist
+
+        var label: String {
+            switch self {
+            case .recentlyAdded: return "Recently added"
+            case .titleAZ:       return "Title (A–Z)"
+            case .titleZA:       return "Title (Z–A)"
+            case .artist:        return "Artist"
+            }
+        }
+    }
+
+    private var sortedTracks: [Track] {
+        switch sortOrder {
+        case .recentlyAdded: return library.tracks
+        case .titleAZ:       return library.tracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .titleZA:       return library.tracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        case .artist:        return library.tracks.sorted { ($0.artist ?? "").localizedCaseInsensitiveCompare($1.artist ?? "") == .orderedAscending }
+        }
+    }
 
     private var filteredTracks: [Track] {
-        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return library.tracks }
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return sortedTracks }
         let q = searchText.lowercased()
-        return library.tracks.filter {
+        return sortedTracks.filter {
             $0.title.lowercased().contains(q) || ($0.artist?.lowercased().contains(q) == true)
         }
     }
 
     var body: some View {
-        List {
-            ForEach(filteredTracks, id: \.id) { track in
-                let isCurrent = (player.currentTrack?.id == track.id)
-                SavedTrackRow(
-                    track: track,
-                    isCurrent: isCurrent,
-                    library: library,
-                    onTap: { player.play(track: track, queue: filteredTracks) },
-                    onAddToPlaylist: { playlist in
-                        library.addTrack(track, to: playlist)
-                        showToast(.success("Added to \"\(playlist.name)\""))
+        ZStack {
+            ScrollView {
+                // Header
+                VStack(spacing: 16) {
+                    Text("Saved songs")
+                        .font(.largeTitle).bold()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 8)
+
+                    // Shuffle
+                    Button {
+                        player.playAll(tracks: filteredTracks.shuffled())
+                    } label: {
+                        Text("SHUFFLE")
+                            .font(.headline).bold()
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .background(
+                                LinearGradient(
+                                    colors: [themeManager.current.accent, themeManager.current.secondaryAccent],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .clipShape(Capsule())
                     }
-                )
-            }
-            .onDelete { indexSet in
-                for index in indexSet {
-                    let track = filteredTracks[index]
-                    if player.currentTrack?.id == track.id { player.stop() }
-                    Task { await library.deleteTrack(track) }
+
+                    // Import
+                    Button { showingImporter = true } label: {
+                        Label("IMPORT SONGS", systemImage: "icloud.and.arrow.down")
+                            .font(.subheadline).bold()
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .overlay(Capsule().stroke(Color.primary.opacity(0.4), lineWidth: 1.5))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
+                Divider().padding(.horizontal)
+
+                // Track list
+                LazyVStack(spacing: 0) {
+                    ForEach(filteredTracks, id: \.id) { track in
+                        let isCurrent = player.currentTrack?.id == track.id
+                        SavedTrackRow(
+                            track: track,
+                            isCurrent: isCurrent,
+                            library: library,
+                            onTap: { player.play(track: track, queue: filteredTracks) },
+                            onAddToPlaylist: { playlist in
+                                library.addTrack(track, to: playlist)
+                                showToast(.success("Added to \"\(playlist.name)\""))
+                            },
+                            onDelete: {
+                                if player.currentTrack?.id == track.id { player.stop() }
+                                Task { await library.deleteTrack(track) }
+                            }
+                        )
+                        Divider().padding(.leading, 16)
+                    }
                 }
             }
+
+            // Sort overlay
+            if showingSortSheet {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .onTapGesture { withAnimation(.spring()) { showingSortSheet = false } }
+                TrackSortSheetView(sortOrder: $sortOrder, isPresented: $showingSortSheet)
+                    .padding(.horizontal, 24)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
         }
-        .navigationTitle("Saved Songs")
-        .navigationBarTitleDisplayMode(.large)
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search songs…")
+        .animation(.spring(), value: showingSortSheet)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
         .toolbar {
-            if !library.tracks.isEmpty {
-                Button {
-                    player.playAll(tracks: filteredTracks)
-                } label: {
-                    Label("Play All", systemImage: "play.circle.fill")
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showingSortSheet = true } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .fontWeight(.semibold)
                 }
             }
         }
@@ -125,7 +252,7 @@ struct SavedSongsView: View {
                 ContentUnavailableView(
                     "No saved songs",
                     systemImage: "music.note",
-                    description: Text("Tap the import button to add songs from your device")
+                    description: Text("Tap Import Songs to add music from your device")
                 )
             } else if filteredTracks.isEmpty {
                 ContentUnavailableView.search(text: searchText)
@@ -139,6 +266,15 @@ struct SavedSongsView: View {
             }
         }
         .animation(.spring(response: 0.3), value: toast != nil)
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.audio],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                for url in urls { library.importTrack(from: url) }
+            }
+        }
     }
 
     // MARK: - Toast
@@ -153,4 +289,3 @@ struct SavedSongsView: View {
         }
     }
 }
-
