@@ -36,6 +36,21 @@ struct ContentView: View {
     @State private var showingSavedSongs = false
     @State private var selectedPlaylistID: UUID?
     @State private var showingPlaylistSearch = false
+    @State private var playlistSortOrder: PlaylistSortOrder = .custom
+    @State private var showingSortSheet = false
+
+    enum PlaylistSortOrder: CaseIterable {
+        case custom, alphabetically, byTracksCount, fromNewest
+
+        var label: String {
+            switch self {
+            case .custom:          return "Default"
+            case .alphabetically:  return "Alphabetically"
+            case .byTracksCount:   return "By tracks' count"
+            case .fromNewest:      return "From newest"
+            }
+        }
+    }
 
     private var filteredTracks: [Track] {
         let base = library.tracks
@@ -201,6 +216,17 @@ struct ContentView: View {
                 }
                 .listStyle(.insetGrouped)
             }
+            .overlay {
+                if showingSortSheet {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation(.spring()) { showingSortSheet = false } }
+                    PlaylistSortSheetView(sortOrder: $playlistSortOrder, isPresented: $showingSortSheet)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                        .padding(.horizontal, 24)
+                }
+            }
+            .animation(.spring(), value: showingSortSheet)
             .background(Color(.systemGroupedBackground))
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showingSavedSongs) {
@@ -245,15 +271,19 @@ struct ContentView: View {
         }
     }
 
+    private var sortedPlaylists: [Playlist] {
+        switch playlistSortOrder {
+        case .custom:         return library.playlists
+        case .alphabetically: return library.playlists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .byTracksCount:  return library.playlists.sorted { $0.trackIDs.count > $1.trackIDs.count }
+        case .fromNewest:     return library.playlists.sorted { $0.createdAt > $1.createdAt }
+        }
+    }
+
     @ViewBuilder
     private var playlistsSection: some View {
-        Section("Playlists") {
-            Button(action: { showingPlaylistAlert = true }) {
-                Label("Create Playlist", systemImage: "plus.circle.fill")
-                    .foregroundStyle(.green)
-            }
-
-            ForEach(library.playlists) { playlist in
+        Section {
+            ForEach(sortedPlaylists) { playlist in
                 Button { selectedPlaylistID = playlist.id } label: {
                     HStack {
                         RoundedRectangle(cornerRadius: 8)
@@ -268,7 +298,20 @@ struct ContentView: View {
             }
             .onDelete { indexSet in
                 for index in indexSet {
-                    library.deletePlaylist(library.playlists[index])
+                    library.deletePlaylist(sortedPlaylists[index])
+                }
+            }
+        } header: {
+            HStack {
+                Text("Playlists")
+                Spacer()
+                Button { showingPlaylistAlert = true } label: {
+                    Image(systemName: "plus")
+                        .fontWeight(.semibold)
+                }
+                Button { showingSortSheet = true } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .fontWeight(.semibold)
                 }
             }
         }
