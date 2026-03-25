@@ -35,6 +35,8 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var showingSavedSongs = false
     @State private var selectedPlaylistID: UUID?
+    @State private var playlistSearchText = ""
+    @State private var showingPlaylistSearch = false
 
     private var filteredTracks: [Track] {
         let base = library.tracks
@@ -176,11 +178,54 @@ struct ContentView: View {
 
     private var libraryTab: some View {
         NavigationStack {
-            List {
-                savedSongsSection
-                playlistsSection
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Library")
+                            .font(.largeTitle).bold()
+                        Spacer()
+                        Button {
+                            withAnimation {
+                                showingPlaylistSearch.toggle()
+                                if !showingPlaylistSearch { playlistSearchText = "" }
+                            }
+                        } label: {
+                            Image(systemName: showingPlaylistSearch ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                                .font(.title2)
+                                .foregroundStyle(showingPlaylistSearch ? themeManager.current.accent : .secondary)
+                        }
+                    }
+
+                    if showingPlaylistSearch {
+                        HStack {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search playlists in your library...", text: $playlistSearchText)
+                                .autocorrectionDisabled()
+                            if !playlistSearchText.isEmpty {
+                                Button { playlistSearchText = "" } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(8)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+                .background(Color(.systemGroupedBackground))
+
+                List {
+                    savedSongsSection
+                    playlistsSection
+                }
+                .listStyle(.insetGrouped)
             }
-            .navigationTitle("Library")
+            .background(Color(.systemGroupedBackground))
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showingSavedSongs) {
                 SavedSongsView(library: library)
             }
@@ -220,6 +265,12 @@ struct ContentView: View {
         }
     }
 
+    private var filteredPlaylists: [Playlist] {
+        let query = playlistSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return library.playlists }
+        return library.playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
     @ViewBuilder
     private var playlistsSection: some View {
         Section("Playlists") {
@@ -227,8 +278,8 @@ struct ContentView: View {
                 Label("Create Playlist", systemImage: "plus.circle.fill")
                     .foregroundStyle(.green)
             }
-
-            ForEach(library.playlists) { playlist in
+            
+            ForEach(filteredPlaylists) { playlist in
                 // Navigate by ID so PlaylistDetailView always reads live data
                 Button { selectedPlaylistID = playlist.id } label: {
                     HStack {
@@ -244,7 +295,7 @@ struct ContentView: View {
             }
             .onDelete { indexSet in
                 for index in indexSet {
-                    library.deletePlaylist(library.playlists[index])
+                    library.deletePlaylist(filteredPlaylists[index])
                 }
             }
         }
