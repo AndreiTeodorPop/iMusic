@@ -14,6 +14,7 @@ def stream():
     opts = {
         "quiet": True,
         "format": "bestaudio[ext=m4a]/bestaudio",
+        "extractor_args": {"youtube": {"player_client": ["web"]}},
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -46,6 +47,7 @@ def download():
         # Download best audio and convert to m4a so iOS can play it natively
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": output_template,
+        "extractor_args": {"youtube": {"player_client": ["web"]}},
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "m4a",
