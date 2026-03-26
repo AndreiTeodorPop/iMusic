@@ -1,3 +1,0 @@
-{
-  "startCommand": "gunicorn imusic_server:app --bind 0.0.0.0:$PORT"
-}
