@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 // MARK: - Models
 
@@ -91,8 +92,8 @@ struct YouTubeService {
         return response.items.map { item in
             YouTubeResult(
                 id:           item.id.videoId,
-                title:        item.snippet.title,
-                channelTitle: item.snippet.channelTitle,
+                title:        item.snippet.title.htmlDecoded,
+                channelTitle: item.snippet.channelTitle.htmlDecoded,
                 duration:     durations[item.id.videoId]
             )
         }
@@ -121,5 +122,17 @@ struct YouTubeService {
         return Dictionary(uniqueKeysWithValues: response.items.map {
             ($0.id, $0.contentDetails.duration)
         })
+    }
+}
+
+private extension String {
+    var htmlDecoded: String {
+        guard contains("&") else { return self }
+        let data = Data(utf8)
+        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
+            .documentType: NSAttributedString.DocumentType.html,
+            .characterEncoding: String.Encoding.utf8.rawValue
+        ]
+        return (try? NSAttributedString(data: data, options: options, documentAttributes: nil))?.string ?? self
     }
 }

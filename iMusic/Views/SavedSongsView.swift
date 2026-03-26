@@ -134,7 +134,7 @@ struct SavedSongsView: View {
         var label: String {
             switch self {
             case .recentlyAdded: return "Recently added"
-            case .titleAZ:       return "Title (A–Z)"
+            case .titleAZ:       return "Alphabetically"
             case .titleZA:       return "Title (Z–A)"
             case .artist:        return "Artist"
             }
