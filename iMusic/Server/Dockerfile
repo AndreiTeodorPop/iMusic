@@ -19,4 +19,4 @@ ENV PORT=8080
 ENV WORKERS=3
 
 # Shell form ensures env variables are expanded
-CMD gunicorn server:app --bind 0.0.0.0:$PORT --workers $WORKERS
+CMD ["sh", "-c", "gunicorn server:app --bind 0.0.0.0:${PORT:-8080} --workers ${WORKERS:-3}"]
