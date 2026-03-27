@@ -136,10 +136,30 @@ struct ContentView: View {
                 }
             }
         }
-        .alert("Playlist already exists", isPresented: $showingDuplicatePlaylistAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("A playlist with that name already exists. Please choose a different name.")
+        .overlay {
+            if showingDuplicatePlaylistAlert {
+                ZStack {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        VStack(spacing: 8) {
+                            Text("Playlist already exists")
+                                .font(.headline)
+                                .multilineTextAlignment(.center)
+                            Text("Please choose a different name.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        Divider()
+                        Button("OK") { showingDuplicatePlaylistAlert = false }
+                            .font(.headline)
+                            .foregroundStyle(themeManager.current.accent)
+                    }
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(40)
+                }
+            }
         }
     }
 
