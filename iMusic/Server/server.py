@@ -115,11 +115,11 @@ def download():
 
     opts = {
         "quiet": True,
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": "bestaudio/best",
         "outtmpl": output_template,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
-            "preferredcodec": "m4a",
+            "preferredcodec": "mp3",
             "preferredquality": "192",
         }],
         "keepvideo": False,
@@ -142,9 +142,9 @@ def download():
 
         return send_file(
             file_path,
-            mimetype="audio/mp4",
+            mimetype="audio/mpeg",
             as_attachment=True,
-            download_name=f"{title}.m4a"
+            download_name=f"{title}.mp3"
         )
 
     except Exception as e:
