@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var showingPlaylistSearch = false
     @State private var playlistSortOrder: PlaylistSortOrder = .custom
     @State private var showingSortSheet = false
+    @State private var showingDuplicatePlaylistAlert = false
 
     enum PlaylistSortOrder: CaseIterable {
         case custom, alphabetically, byTracksCount, fromNewest
@@ -124,11 +125,21 @@ struct ContentView: View {
             TextField("Playlist name", text: $newPlaylistName)
             Button("Cancel", role: .cancel) { newPlaylistName = "" }
             Button("Create") {
-                if !newPlaylistName.isEmpty {
-                    library.createPlaylist(name: newPlaylistName)
+                let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                if library.playlists.contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+                    newPlaylistName = ""
+                    showingDuplicatePlaylistAlert = true
+                } else {
+                    library.createPlaylist(name: name)
                     newPlaylistName = ""
                 }
             }
+        }
+        .alert("Playlist already exists", isPresented: $showingDuplicatePlaylistAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("A playlist with that name already exists. Please choose a different name.")
         }
     }
 
