@@ -16,6 +16,7 @@ private struct SavedTrackRow: View {
     }
 
     @State private var showingOptions = false
+    @State private var showingShareSheet = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -51,8 +52,12 @@ private struct SavedTrackRow: View {
                         }
                     }
                 }
+                Button("Save to Files") { showingShareSheet = true }
                 Button("Delete", role: .destructive) { onDelete() }
                 Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $showingShareSheet) {
+                ShareSheet(items: [track.url])
             }
         }
         .contentShape(Rectangle())

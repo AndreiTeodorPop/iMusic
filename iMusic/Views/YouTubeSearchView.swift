@@ -55,9 +55,9 @@ private struct YouTubeResultRow: View {
     let onDownloadError: (Error) -> Void
 
     @ObservedObject var library: AudioLibrary
-    @State private var pendingFileURL: URL? = nil
     @State private var showingDuplicateAlert = false
     @State private var downloadTask: Task<Void, Never>? = nil
+    @State private var savedFileURL: URL? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -90,25 +90,10 @@ private struct YouTubeResultRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onPlay)
         .sheet(item: Binding(
-            get: { pendingFileURL.map { IdentifiableURL($0) } },
-            set: { if $0 == nil { pendingFileURL = nil } }
+            get: { savedFileURL.map { IdentifiableURL($0) } },
+            set: { if $0 == nil { savedFileURL = nil } }
         )) { identifiable in
-            FileSaverPicker(sourceURL: identifiable.url) { result in
-                pendingFileURL = nil
-                switch result {
-                case .success(let savedURL):
-                    let fileName = identifiable.url.lastPathComponent
-                    try? library.copyToDownloads(from: identifiable.url, fileName: fileName)
-                    Task { await library.loadExistingTracks() }
-                    onDownloaded(savedURL)
-                case .failure(let error):
-                    if (error as? FileSaverPicker.FileSaverError) == .cancelled {
-                        onDownloadCancelled()
-                    } else {
-                        onDownloadError(error)
-                    }
-                }
-            }
+            ShareSheet(items: [identifiable.url])
         }
     }
 
@@ -156,7 +141,12 @@ private struct YouTubeResultRow: View {
                 for: result.id,
                 title: result.title
             )
-            pendingFileURL = tempURL
+            let fileName = tempURL.lastPathComponent
+            try library.copyToDownloads(from: tempURL, fileName: fileName)
+            await library.loadExistingTracks()
+            let savedURL = library.downloadsDirectory.appendingPathComponent(fileName)
+            onDownloaded(savedURL)
+            savedFileURL = savedURL
         } catch {
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 onDownloadCancelled()
