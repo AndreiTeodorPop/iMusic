@@ -97,13 +97,8 @@ struct ContentView: View {
                 IntentBridge.shared.pendingYouTubeSearch = pendingQuery
             }
         }
-        .onReceive(IntentBridge.shared.$pendingYouTubePlay.compactMap { $0 }) { pendingQuery in
+        .onReceive(IntentBridge.shared.$pendingYouTubePlay.compactMap { $0 }) { _ in
             selectedTab = 1
-            IntentBridge.shared.pendingYouTubePlay = nil
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(300))
-                IntentBridge.shared.pendingYouTubePlay = pendingQuery
-            }
         }
         .onReceive(IntentBridge.shared.$pendingSavedSongSearch.compactMap { $0 }) { name in
             IntentBridge.shared.pendingSavedSongSearch = nil

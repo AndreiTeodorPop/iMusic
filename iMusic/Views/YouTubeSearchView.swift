@@ -183,6 +183,7 @@ struct YouTubeSearchView: View {
     @State private var toast: ToastType?             = nil
     @State private var toastTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
+    @State private var autoPlayNextSearch = false
 
     @ObservedObject var library: AudioLibrary
 
@@ -204,6 +205,12 @@ struct YouTubeSearchView: View {
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled else { return }
                     await performSearch()
+                    if autoPlayNextSearch {
+                        autoPlayNextSearch = false
+                        if let first = results.first {
+                            await playResult(first)
+                        }
+                    }
                 }
             }
             .scrollIndicators(.visible)
@@ -216,16 +223,9 @@ struct YouTubeSearchView: View {
             }
             .onReceive(IntentBridge.shared.$pendingYouTubePlay.compactMap { $0 }) { searchQuery in
                 IntentBridge.shared.pendingYouTubePlay = nil
+                autoPlayNextSearch = true
                 query = searchQuery
-                searchTask?.cancel()
-                searchTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(500))
-                    guard !Task.isCancelled else { return }
-                    await performSearch()
-                    if let first = results.first {
-                        await playResult(first)
-                    }
-                }
+                // onChange(of: query) picks up autoPlayNextSearch and plays the first result
             }
         }
     }
