@@ -22,15 +22,15 @@ CACHE_TTL = 3600  # YouTube URLs expire in ~6h; refresh after 1h to be safe
 def _fetch_info_with_retry(video_id, max_retries=3):
     opts = {
         "quiet": True,
-        "format": "bestaudio[ext=m4a]/bestaudio",
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
         "retries": 3,
         "extractor_retries": 3,
         "sleep_interval": 2,
         "max_sleep_interval": 5,
-        # Use the iOS player client to avoid YouTube bot-detection on server deployments
+        # tv_embedded doesn't require PO tokens and works on headless servers
         "extractor_args": {
             "youtube": {
-                "player_client": ["ios", "web"]
+                "player_client": ["tv_embedded", "android", "web"]
             }
         },
     }
