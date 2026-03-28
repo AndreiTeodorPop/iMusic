@@ -181,6 +181,71 @@ def download():
             pass
 
 
+@app.route("/related")
+def related():
+    video_id = request.args.get("id", "")
+    if not video_id:
+        return jsonify({"error": "missing id"}), 400
+
+    try:
+        # Fetch info to get related videos (no format selection needed)
+        opts = {
+            "quiet": True,
+            "skip_download": True,
+            "retries": 3,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}",
+                download=False
+            )
+
+        related_list = info.get("related_videos") or []
+        results = []
+        for v in related_list[:10]:
+            vid_id = v.get("id")
+            if not vid_id or vid_id == video_id:
+                continue
+            results.append({
+                "id": vid_id,
+                "title": v.get("title", ""),
+                "channelTitle": v.get("uploader", "") or v.get("channel", ""),
+            })
+
+        # Fallback: search by title + uploader if no related videos found
+        if not results:
+            title = info.get("title", "")
+            uploader = info.get("uploader", "") or info.get("channel", "")
+            query = f"{uploader} {title}".strip() if uploader else title
+
+            search_opts = {
+                "quiet": True,
+                "extract_flat": True,
+                "skip_download": True,
+                "playlistend": 11,
+            }
+            with yt_dlp.YoutubeDL(search_opts) as ydl:
+                search_info = ydl.extract_info(f"ytsearch11:{query}", download=False)
+                for entry in (search_info.get("entries") or []):
+                    vid_id = entry.get("id")
+                    if not vid_id or vid_id == video_id:
+                        continue
+                    results.append({
+                        "id": vid_id,
+                        "title": entry.get("title", ""),
+                        "channelTitle": entry.get("uploader", "") or entry.get("channel", ""),
+                    })
+                    if len(results) >= 10:
+                        break
+
+        return jsonify({"items": results})
+
+    except Exception as e:
+        status = 429 if "429" in str(e) else 500
+        msg = "YouTube is rate-limiting the server. Please wait a moment and try again." if status == 429 else str(e)
+        return jsonify({"error": msg}), status
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)

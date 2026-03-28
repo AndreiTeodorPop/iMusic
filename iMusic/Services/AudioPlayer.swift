@@ -255,15 +255,17 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func playNext() {
-        // YouTube queue takes priority
+        // YouTube queue — always play a suggested/related video
         if !youtubeQueue.isEmpty {
-            guard youtubeIndex + 1 < youtubeQueue.count else { stop(); return }
             guard !isLoadingNextYouTube else { return }
             isLoadingNextYouTube = true
-            youtubeIndex += 1
-            let next = youtubeQueue[youtubeIndex]
+            guard let videoID = currentTrack?.youtubeVideoID else {
+                isLoadingNextYouTube = false
+                stop()
+                return
+            }
             Task {
-                await streamYouTubeResult(next)
+                await playSuggested(for: videoID)
                 isLoadingNextYouTube = false
             }
             return
@@ -272,6 +274,22 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard !playlistQueue.isEmpty else { stop(); return }
         currentIndex = (currentIndex + 1) % playlistQueue.count
         play(track: playlistQueue[currentIndex])
+    }
+
+    private func playSuggested(for videoID: String) async {
+        do {
+            let suggested = try await StreamService.getRelated(for: videoID)
+            guard let first = suggested.first else { stop(); return }
+            let results = suggested.map {
+                YouTubeResult(id: $0.id, title: $0.title, channelTitle: $0.channelTitle, duration: nil)
+            }
+            youtubeQueue = results
+            youtubeIndex = 0
+            await streamYouTubeResult(results[0])
+        } catch {
+            print("Failed to fetch suggested videos: \(error)")
+            stop()
+        }
     }
 
     func playPrevious() {

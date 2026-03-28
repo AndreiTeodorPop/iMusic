@@ -78,6 +78,35 @@ struct StreamService {
         return namedURL
     }
 
+    // MARK: - Related / Suggested
+
+    struct SuggestedVideo {
+        let id: String
+        let title: String
+        let channelTitle: String
+    }
+
+    static func getRelated(for videoId: String) async throws -> [SuggestedVideo] {
+        guard let url = URL(string: "\(baseURL)/related?id=\(videoId)") else {
+            throw StreamError.invalidURL
+        }
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw StreamError.serverError
+        }
+
+        struct Item: Decodable {
+            let id: String
+            let title: String
+            let channelTitle: String
+        }
+        struct Response: Decodable { let items: [Item] }
+
+        return try JSONDecoder().decode(Response.self, from: data).items.map {
+            SuggestedVideo(id: $0.id, title: $0.title, channelTitle: $0.channelTitle)
+        }
+    }
+
     // MARK: - Errors
 
     enum StreamError: LocalizedError {
