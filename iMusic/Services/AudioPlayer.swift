@@ -35,6 +35,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private var streamPlayer: AVPlayer?
     private var streamTimeObserver: Any?
+    private var streamEndObserver: Any?
 
     // MARK: - YouTube Queue
 
@@ -111,6 +112,15 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         streamPlayer?.play()
 
         attachStreamTimeObserver()
+
+        streamEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.playNext() }
+        }
+
         updateNowPlayingInfo()
 
         Task { @MainActor in
@@ -129,11 +139,14 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             streamPlayer?.removeTimeObserver(obs)
             streamTimeObserver = nil
         }
+        if let obs = streamEndObserver {
+            NotificationCenter.default.removeObserver(obs)
+            streamEndObserver = nil
+        }
         streamPlayer = nil
     }
 
     private func attachStreamTimeObserver() {
-        var didAdvance = false
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         streamTimeObserver = streamPlayer?.addPeriodicTimeObserver(
             forInterval: interval, queue: .main
@@ -141,18 +154,10 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             Task { @MainActor [weak self] in
                 guard let self, self.streamPlayer != nil else { return }
                 let seconds = time.seconds
-                if self.duration > 0 && seconds >= self.duration {
-                    self.currentTime = self.duration
-                    if !didAdvance {
-                        didAdvance = true
-                        self.playNext()
-                    }
-                } else {
-                    self.currentTime = seconds
-                    if let d = self.streamPlayer?.currentItem?.duration,
-                       d.isNumeric, d.seconds > 0, self.duration == 0 {
-                        self.duration = d.seconds
-                    }
+                self.currentTime = seconds
+                if let d = self.streamPlayer?.currentItem?.duration,
+                   d.isNumeric, d.seconds > 0, self.duration == 0 {
+                    self.duration = d.seconds
                 }
             }
         }
