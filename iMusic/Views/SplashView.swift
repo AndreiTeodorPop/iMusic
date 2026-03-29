@@ -101,7 +101,7 @@ struct SplashView: View {
                         )
                         .shadow(color: Color(red: 1.0, green: 0.84, blue: 0.0).opacity(0.5), radius: 8)
 
-                    Text("I'm gonna be the Pirate King!")
+                    Text("Your music, your way.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.white.opacity(0.75))
                         .italic()
