@@ -13,27 +13,35 @@ struct iMusicApp: App {
     @StateObject private var sharedPlayer = AudioPlayer()
     @StateObject private var themeManager = ThemeManager()
     @State private var showSplash = true
+    @State private var showContent = false
 
     var body: some Scene {
         WindowGroup {
             ZStack {
-                ContentView()
-                    .environmentObject(sharedPlayer)
-                    .environmentObject(themeManager)
-                    .tint(themeManager.current.accent)
-                    .task { @MainActor in
-                        sharedPlayer.configureAudioSession()
-                        iMusicShortcuts.updateAppShortcutParameters()
-                    }
+                if showContent {
+                    ContentView()
+                        .environmentObject(sharedPlayer)
+                        .environmentObject(themeManager)
+                        .tint(themeManager.current.accent)
+                        .transition(.opacity)
+                        .task { @MainActor in
+                            sharedPlayer.configureAudioSession()
+                            iMusicShortcuts.updateAppShortcutParameters()
+                        }
+                }
 
                 if showSplash {
                     SplashView()
                         .transition(.opacity)
                         .zIndex(1)
                         .task {
-                            try? await Task.sleep(for: .milliseconds(1800))
-                            withAnimation(.easeOut(duration: 0.5)) {
+                            try? await Task.sleep(for: .milliseconds(2800))
+                            withAnimation(.easeOut(duration: 0.6)) {
                                 showSplash = false
+                            }
+                            try? await Task.sleep(for: .milliseconds(600))
+                            withAnimation(.easeIn(duration: 0.3)) {
+                                showContent = true
                             }
                         }
                 }
