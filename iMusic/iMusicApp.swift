@@ -32,6 +32,7 @@ struct iMusicApp: App {
 
                 if showSplash {
                     SplashView()
+                        .environmentObject(themeManager)
                         .transition(.opacity)
                         .zIndex(1)
                         .task {

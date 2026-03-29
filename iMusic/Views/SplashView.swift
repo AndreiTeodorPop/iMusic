@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SplashView: View {
+    @EnvironmentObject private var themeManager: ThemeManager
+
     @State private var logoScale: CGFloat = 0.3
     @State private var logoOpacity: Double = 0
     @State private var textOpacity: Double = 0
@@ -10,16 +12,19 @@ struct SplashView: View {
 
     var body: some View {
         ZStack {
-            // Ocean gradient background
-            LinearGradient(
-                colors: [
-                    Color(red: 0.04, green: 0.12, blue: 0.28),
-                    Color(red: 0.06, green: 0.22, blue: 0.45),
-                    Color(red: 0.08, green: 0.30, blue: 0.55)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            // Theme-tinted dark background
+            ZStack {
+                Color.black
+                LinearGradient(
+                    colors: [
+                        themeManager.current.accent.opacity(0.55),
+                        themeManager.current.secondaryAccent.opacity(0.35),
+                        themeManager.current.accent.opacity(0.20)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
             .ignoresSafeArea()
 
             // Animated wave lines
@@ -37,54 +42,17 @@ struct SplashView: View {
             }
             .ignoresSafeArea()
 
-            // Gold decorative circles
-            Circle()
-                .stroke(Color(red: 1.0, green: 0.84, blue: 0.0).opacity(0.08), lineWidth: 1)
-                .frame(width: 280, height: 280)
-            Circle()
-                .stroke(Color(red: 1.0, green: 0.84, blue: 0.0).opacity(0.05), lineWidth: 1)
-                .frame(width: 220, height: 220)
-
             VStack(spacing: 24) {
-                // Logo with gold ring
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 1.0, green: 0.84, blue: 0.0).opacity(0.3),
-                                    Color(red: 0.85, green: 0.65, blue: 0.0).opacity(0.1)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 130, height: 130)
-
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 1.0, green: 0.84, blue: 0.0),
-                                    Color(red: 0.85, green: 0.55, blue: 0.0)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 2.5
-                        )
-                        .frame(width: 130, height: 130)
-
-                    Image("iMusicLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 100, height: 100)
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
-                        .shadow(color: Color(red: 1.0, green: 0.84, blue: 0.0).opacity(0.4), radius: 16, y: 6)
-                }
-                .scaleEffect(logoScale)
-                .opacity(logoOpacity)
-                .rotation3DEffect(.degrees(hatRotation), axis: (x: 0, y: 1, z: 0))
+                // Logo
+                Image("iMusicLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 110, height: 110)
+                    .clipShape(RoundedRectangle(cornerRadius: 26))
+                    .shadow(color: themeManager.current.accent.opacity(0.5), radius: 20, y: 8)
+                    .scaleEffect(logoScale)
+                    .opacity(logoOpacity)
+                    .rotation3DEffect(.degrees(hatRotation), axis: (x: 0, y: 1, z: 0))
 
                 VStack(spacing: 8) {
                     Text("iMusic")
@@ -92,14 +60,14 @@ struct SplashView: View {
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [
-                                    Color(red: 1.0, green: 0.92, blue: 0.4),
-                                    Color(red: 1.0, green: 0.75, blue: 0.0)
+                                    themeManager.current.accent,
+                                    themeManager.current.secondaryAccent
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
-                        .shadow(color: Color(red: 1.0, green: 0.84, blue: 0.0).opacity(0.5), radius: 8)
+                        .shadow(color: themeManager.current.accent.opacity(0.6), radius: 8)
 
                     Text("Your music, your way.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
