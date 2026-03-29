@@ -175,7 +175,7 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 25) {
-                    homeSection(title: "Recently Added", items: Array(library.tracks.suffix(5))) { track in
+                    homeSection(title: "Recent tracks", items: Array(library.tracks.prefix(10))) { track in
                         TrackCard(track: track)
                             .onTapGesture { player.play(track: track, queue: library.tracks) }
                     }
