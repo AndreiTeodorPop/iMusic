@@ -66,9 +66,11 @@ struct YouTubeService {
             URLQueryItem(name: "q",          value: query),
             URLQueryItem(name: "type",       value: "video"),
             URLQueryItem(name: "maxResults", value: "10"),
-            URLQueryItem(name: "videoEmbeddable", value: "true"),
-            URLQueryItem(name: "videoCategoryId", value: "10"),
-            URLQueryItem(name: "key",        value: apiKey),
+            URLQueryItem(name: "videoEmbeddable",  value: "true"),
+            URLQueryItem(name: "videoCategoryId",  value: "10"),
+            URLQueryItem(name: "regionCode",       value: "RO"),
+            URLQueryItem(name: "relevanceLanguage", value: "ro"),
+            URLQueryItem(name: "key",              value: apiKey),
         ]
         let (data, urlResponse) = try await URLSession.shared.data(from: c.url!)
 

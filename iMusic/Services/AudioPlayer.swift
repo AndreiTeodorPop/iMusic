@@ -29,6 +29,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     // YouTube queue
     private var youtubeQueue: [YouTubeResult] = []
     private var youtubeIndex: Int = 0
+    private var youtubeHistory: [YouTubeResult] = []
     private var isLoadingNextYouTube: Bool = false
     private var playedYouTubeIDs: Set<String> = []
 
@@ -43,7 +44,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func setYouTubeQueue(_ results: [YouTubeResult], startingAt index: Int) {
         youtubeQueue = results
         youtubeIndex = index
-        // Clear local queue so next/previous routes to YouTube queue
+        youtubeHistory = []
         playlistQueue = []
         originalQueue = []
     }
@@ -265,18 +266,34 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func playNext() {
-        // YouTube queue — always play a suggested/related video
         if !youtubeQueue.isEmpty {
             guard !isLoadingNextYouTube else { return }
             isLoadingNextYouTube = true
-            guard let videoID = currentTrack?.youtubeVideoID else {
-                isLoadingNextYouTube = false
-                stop()
-                return
+
+            // Push current track to history before moving forward
+            if let track = currentTrack, let videoID = track.youtubeVideoID {
+                youtubeHistory.append(YouTubeResult(id: videoID, title: track.title, channelTitle: track.artist ?? "", duration: nil))
             }
-            Task {
-                await playSuggested(for: videoID)
-                isLoadingNextYouTube = false
+
+            if youtubeIndex + 1 < youtubeQueue.count {
+                // Play next item in the search results queue
+                youtubeIndex += 1
+                let next = youtubeQueue[youtubeIndex]
+                Task {
+                    await streamYouTubeResult(next)
+                    isLoadingNextYouTube = false
+                }
+            } else {
+                // Queue exhausted — fetch suggestions
+                guard let videoID = currentTrack?.youtubeVideoID else {
+                    isLoadingNextYouTube = false
+                    stop()
+                    return
+                }
+                Task {
+                    await playSuggested(for: videoID)
+                    isLoadingNextYouTube = false
+                }
             }
             return
         }
@@ -323,11 +340,12 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 seek(to: 0)
                 return
             }
-            guard youtubeIndex > 0 else { seek(to: 0); return }
+            guard !youtubeHistory.isEmpty else { seek(to: 0); return }
             guard !isLoadingNextYouTube else { return }
             isLoadingNextYouTube = true
-            youtubeIndex -= 1
-            let prev = youtubeQueue[youtubeIndex]
+            let prev = youtubeHistory.removeLast()
+            // Also step back the queue index if possible
+            if youtubeIndex > 0 { youtubeIndex -= 1 }
             Task {
                 await streamYouTubeResult(prev)
                 isLoadingNextYouTube = false
