@@ -6,27 +6,39 @@ struct SiriShortcutsView: View {
         (
             icon: "play.circle",
             color: .orange,
-            title: "Play on YouTube",
+            title: "Play a Song on YouTube",
             phrase: "\"Search YouTube and immediately play the top result in iMusic\""
-        ),
-        (
-            icon: "magnifyingglass",
-            color: .red,
-            title: "Play a Saved Song",
-            phrase: "\"Play a saved song in iMusic\""
         ),
         (
             icon: "music.note",
             color: .blue,
-            title: "Play a Playlist",
-            phrase: "\"Play a playlist in iMusic\""
+            title: "Play a Saved Song",
+            phrase: "\"Play saved song in iMusic\""
         ),
         (
-            icon: "music.note.list",
-            color: .green,
-            title: "Play an Artist",
-            phrase: "\"Play a artist in iMusic\""
+            icon: "pause.fill",
+            color: .purple,
+            title: "Pause Music",
+            phrase: "\"Pause iMusic\""
         ),
+        (
+            icon: "play.fill",
+            color: .indigo,
+            title: "Resume Music",
+            phrase: "\"Resume iMusic\""
+        ),
+        (
+            icon: "forward.fill",
+            color: .teal,
+            title: "Skip Track",
+            phrase: "\"Skip in iMusic\""
+        ),
+        (
+            icon: "backward.fill",
+            color: .red,
+            title: "Previous Track",
+            phrase: "\"Previous in iMusic\""
+        )
     ]
 
     var body: some View {

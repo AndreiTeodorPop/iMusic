@@ -12,6 +12,10 @@ import AppIntents
 struct iMusicApp: App {
     @StateObject private var sharedPlayer = AudioPlayer()
     @StateObject private var themeManager = ThemeManager()
+
+    init() {
+        iMusicShortcuts.updateAppShortcutParameters()
+    }
     @State private var showSplash = true
     @State private var showContent = false
 
