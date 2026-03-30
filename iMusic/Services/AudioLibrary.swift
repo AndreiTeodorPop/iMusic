@@ -95,6 +95,33 @@ final class AudioLibrary: ObservableObject {
         }
     }
 
+    // MARK: - Metadata Cache
+
+    private struct CachedMeta: Codable {
+        let title: String
+        let artist: String?
+        let album: String?
+        let duration: TimeInterval?
+        let modDate: Date
+    }
+
+    private var metaCacheURL: URL {
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("track_meta_cache.json")
+    }
+
+    private func loadMetaCache() -> [String: CachedMeta] {
+        guard let data = try? Data(contentsOf: metaCacheURL),
+              let cache = try? JSONDecoder().decode([String: CachedMeta].self, from: data)
+        else { return [:] }
+        return cache
+    }
+
+    private func saveMetaCache(_ cache: [String: CachedMeta]) {
+        guard let data = try? JSONEncoder().encode(cache) else { return }
+        try? data.write(to: metaCacheURL, options: .atomic)
+    }
+
     // MARK: - Track Loading
 
     func loadExistingTracks() async {
@@ -115,19 +142,50 @@ final class AudioLibrary: ObservableObject {
                     return dateA > dateB
                 }
 
-            let newTracks = await withTaskGroup(of: (Int, Track).self) { group -> [Track] in
-                for (index, url) in audioURLs.enumerated() {
-                    group.addTask {
-                        let track = await self.buildTrack(from: url)
-                        return (index, track)
-                    }
-                }
-                var indexed: [(Int, Track)] = []
-                for await pair in group { indexed.append(pair) }
-                return indexed.sorted { $0.0 < $1.0 }.map { $0.1 }
-            }
+            let cache = loadMetaCache()
 
-            self.tracks = newTracks
+            // Each task is nonisolated — runs truly in parallel on the thread pool
+            let results: [(index: Int, track: Track, path: String, meta: CachedMeta)] =
+                await withTaskGroup(of: (Int, Track, String, CachedMeta).self) { group in
+                    for (index, url) in audioURLs.enumerated() {
+                        group.addTask {
+                            let path = url.path
+                            let modDate = (try? url.resourceValues(
+                                forKeys: [.contentModificationDateKey]
+                            ).contentModificationDate) ?? .distantPast
+
+                            // Cache hit — skip AVFoundation entirely
+                            if let cached = cache[path],
+                               abs(cached.modDate.timeIntervalSince(modDate)) < 1 {
+                                return await (index,
+                                        Track(url: url, title: cached.title, artist: cached.artist,
+                                              album: cached.album, duration: cached.duration),
+                                        path, cached)
+                            }
+
+                            // Cache miss — read metadata off the thread pool
+                            let m = await AudioLibrary.readMeta(from: url)
+                            let newMeta = CachedMeta(title: m.title, artist: m.artist,
+                                                     album: m.album, duration: m.duration,
+                                                     modDate: modDate)
+                            return await (index,
+                                    Track(url: url, title: m.title, artist: m.artist,
+                                          album: m.album, duration: m.duration),
+                                    path, newMeta)
+                        }
+                    }
+                    var out: [(Int, Track, String, CachedMeta)] = []
+                    for await r in group { out.append(r) }
+                    return out.map { (index: $0.0, track: $0.1, path: $0.2, meta: $0.3) }
+                }
+
+            // Persist updated cache, pruning deleted files
+            let validPaths = Set(audioURLs.map { $0.path })
+            var updatedCache = cache.filter { validPaths.contains($0.key) }
+            for r in results { updatedCache[r.path] = r.meta }
+            saveMetaCache(updatedCache)
+
+            self.tracks = results.sorted { $0.index < $1.index }.map { $0.track }
 
         } catch {
             print("AudioLibrary load error: \(error)")
@@ -176,7 +234,10 @@ final class AudioLibrary: ObservableObject {
 
     // MARK: - Helpers
 
-    private func buildTrack(from url: URL) async -> Track {
+    // nonisolated + static so task-group children run on the thread pool, not the main actor
+    nonisolated private static func readMeta(
+        from url: URL
+    ) async -> (title: String, artist: String?, album: String?, duration: TimeInterval?) {
         let asset = AVURLAsset(url: url)
         var title    = url.deletingPathExtension().lastPathComponent
         var artist: String?
@@ -184,22 +245,17 @@ final class AudioLibrary: ObservableObject {
         var duration: TimeInterval?
 
         do {
-            let cmDuration = try await asset.load(.duration)
-            duration = cmDuration.seconds
-
-            let metadata = try await asset.load(.commonMetadata)
-            for item in metadata {
-                if item.commonKey?.rawValue == "title",
-                   let v = try await item.load(.stringValue) { title = v }
-                if item.commonKey?.rawValue == "artist",
-                   let v = try await item.load(.stringValue) { artist = v }
-                if item.commonKey?.rawValue == "albumName",
-                   let v = try await item.load(.stringValue) { album = v }
+            duration = try await asset.load(.duration).seconds
+            for item in try await asset.load(.commonMetadata) {
+                switch item.commonKey?.rawValue {
+                case "title":     if let v = try? await item.load(.stringValue) { title = v }
+                case "artist":    if let v = try? await item.load(.stringValue) { artist = v }
+                case "albumName": if let v = try? await item.load(.stringValue) { album = v }
+                default: break
+                }
             }
-        } catch {
-            print("Failed loading metadata:", error)
-        }
+        } catch {}
 
-        return Track(url: url, title: title, artist: artist, album: album, duration: duration)
+        return (title, artist, album, duration)
     }
 }
