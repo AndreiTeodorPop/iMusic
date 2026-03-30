@@ -11,7 +11,9 @@ final class IntentBridge: ObservableObject {
 
     @Published var pendingYouTubeSearch: String? = nil
     @Published var pendingYouTubePlay: String? = nil
+    @Published var pendingYouTubePlayReady: String? = nil
     @Published var pendingSavedSongSearch: String? = nil
     @Published var pendingPlaylistName: String? = nil
+    @Published var pendingArtistSearch: String? = nil
     @Published var pendingPlayerAction: PendingPlayerAction? = nil
 }

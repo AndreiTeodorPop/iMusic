@@ -1,23 +1,5 @@
 import AppIntents
 
-// MARK: - Search YouTube
-
-struct SearchYouTubeIntent: AppIntent {
-    static var title: LocalizedStringResource = "Search YouTube for a Song"
-    static var description = IntentDescription("Search for a song or artist on YouTube in iMusic")
-    static var openAppWhenRun: Bool = true
-
-    @Parameter(title: "Song or Artist", description: "What to search for on YouTube")
-    var songName: String
-
-    func perform() async throws -> some IntentResult {
-        await MainActor.run {
-            IntentBridge.shared.pendingYouTubeSearch = songName
-        }
-        return .result()
-    }
-}
-
 // MARK: - Play YouTube (search + auto-play first result)
 
 struct PlayYouTubeIntent: AppIntent {
@@ -67,6 +49,39 @@ struct PlayPlaylistIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         await MainActor.run {
             IntentBridge.shared.pendingPlaylistName = playlistName
+        }
+        return .result()
+    }
+}
+
+// MARK: - Play Artist
+
+struct PlayArtistIntent: AppIntent {
+    static var title: LocalizedStringResource = "Play an Artist"
+    static var description = IntentDescription("Search and play music by an artist in iMusic")
+    static var openAppWhenRun: Bool = true
+
+    @Parameter(title: "Artist Name", description: "Name of the artist to play")
+    var artistName: String
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run {
+            IntentBridge.shared.pendingArtistSearch = artistName
+        }
+        return .result()
+    }
+}
+
+// MARK: - Previous Track
+
+struct PreviousTrackIntent: AppIntent {
+    static var title: LocalizedStringResource = "Previous Track"
+    static var description = IntentDescription("Go back to the previous song in iMusic")
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run {
+            IntentBridge.shared.pendingPlayerAction = .previous
         }
         return .result()
     }
@@ -131,16 +146,6 @@ struct iMusicShortcuts: AppShortcutsProvider {
             systemImageName: "play.circle"
         )
         AppShortcut(
-            intent: SearchYouTubeIntent(),
-            phrases: [
-                "Search YouTube in \(.applicationName)",
-                "Search for a song in \(.applicationName)",
-                "Find music in \(.applicationName)"
-            ],
-            shortTitle: "Search YouTube",
-            systemImageName: "magnifyingglass"
-        )
-        AppShortcut(
             intent: PlaySavedSongIntent(),
             phrases: [
                 "Play a song in \(.applicationName)",
@@ -157,6 +162,24 @@ struct iMusicShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Play Playlist",
             systemImageName: "music.note.list"
+        )
+        AppShortcut(
+            intent: PlayArtistIntent(),
+            phrases: [
+                "Play an artist in \(.applicationName)",
+                "Play music by an artist in \(.applicationName)"
+            ],
+            shortTitle: "Play Artist",
+            systemImageName: "person.fill"
+        )
+        AppShortcut(
+            intent: PreviousTrackIntent(),
+            phrases: [
+                "Previous song in \(.applicationName)",
+                "Go back in \(.applicationName)"
+            ],
+            shortTitle: "Previous Track",
+            systemImageName: "backward.fill"
         )
         AppShortcut(
             intent: PauseMusicIntent(),

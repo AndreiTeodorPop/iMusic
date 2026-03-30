@@ -202,6 +202,8 @@ struct YouTubeSearchView: View {
                         if let first = results.first {
                             await playResult(first)
                         }
+                        query = ""
+                        results = []
                     }
                 }
             }
@@ -213,11 +215,10 @@ struct YouTubeSearchView: View {
                 query = searchQuery
                 // onChange(of: query) handles the search — no second task needed
             }
-            .onReceive(IntentBridge.shared.$pendingYouTubePlay.compactMap { $0 }) { searchQuery in
-                IntentBridge.shared.pendingYouTubePlay = nil
+            .onReceive(IntentBridge.shared.$pendingYouTubePlayReady.compactMap { $0 }) { searchQuery in
+                IntentBridge.shared.pendingYouTubePlayReady = nil
                 autoPlayNextSearch = true
                 query = searchQuery
-                // onChange(of: query) picks up autoPlayNextSearch and plays the first result
             }
         }
     }
