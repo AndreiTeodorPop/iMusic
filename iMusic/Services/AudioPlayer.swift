@@ -4,6 +4,7 @@ import Combine
 import SwiftUI
 import MediaPlayer
 import AVKit
+import UIKit
 
 @MainActor
 final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
@@ -122,6 +123,36 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         youtubeQueue.remove(atOffsets: adjustedOffsets)
     }
 
+    // MARK: - Background task
+
+    /// Keeps the process alive for up to ~30 s while AVPlayer buffers after a Siri intent.
+    /// Without this, iOS suspends the app immediately after `perform()` returns and
+    /// the stream never starts.
+    private func beginStreamBackgroundTask() {
+        var taskID = UIBackgroundTaskIdentifier.invalid
+        taskID = UIApplication.shared.beginBackgroundTask(withName: "imusic-stream-start") {
+            UIApplication.shared.endBackgroundTask(taskID)
+        }
+        guard taskID != .invalid else { return }
+        Task { @MainActor [weak self] in
+            defer { UIApplication.shared.endBackgroundTask(taskID) }
+            // Poll until the stream is actually playing or we time out (~30 s / 0.5 s = 60 ticks)
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                if self.isActuallyPlaying { return }
+            }
+        }
+    }
+
+    /// True when AVPlayer is genuinely producing audio (not just flagged isPlaying).
+    var isActuallyPlaying: Bool {
+        if let sp = streamPlayer {
+            return sp.timeControlStatus == .playing || sp.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        }
+        return player?.isPlaying ?? false
+    }
+
     // MARK: - YouTube streaming
 
     func playYouTube(url: URL, title: String, artist: String, duration: TimeInterval, videoID: String) {
@@ -146,6 +177,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         isPlaying = true
 
         streamPlayer?.play()
+        beginStreamBackgroundTask()
         schedulePlayRetry()
 
         attachStreamTimeObserver()
@@ -489,17 +521,21 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// the session becomes available once Siri finishes speaking the intent response.
     private func schedulePlayRetry() {
         Task { @MainActor [weak self] in
-            for _ in 0..<4 {
+            for _ in 0..<8 {
                 try? await Task.sleep(for: .seconds(1))
-                guard let self, self.currentTrack != nil, !self.isPlaying else { return }
+                guard let self, self.currentTrack != nil else { return }
+                // Already genuinely playing — nothing to do.
+                if self.isActuallyPlaying { return }
                 do {
                     try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
                     try AVAudioSession.sharedInstance().setActive(true)
                 } catch { continue }
-                if let p = self.player, !p.isPlaying {
+                if let sp = self.streamPlayer {
+                    sp.play()
+                    self.isPlaying = true
+                    self.updateNowPlayingInfo()
+                } else if let p = self.player, !p.isPlaying {
                     if p.play() { self.isPlaying = true; self.startTimer(); self.updateNowPlayingInfo() }
-                } else if let sp = self.streamPlayer, sp.rate == 0 {
-                    sp.play(); self.isPlaying = true; self.updateNowPlayingInfo()
                 }
             }
         }
