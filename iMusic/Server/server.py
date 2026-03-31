@@ -6,6 +6,7 @@ import tempfile
 import shutil
 import time
 import threading
+import urllib.parse
 import requests as http_requests
 
 FFMPEG_LOCATION = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
@@ -250,6 +251,122 @@ def related():
         status = 429 if "429" in str(e) else 500
         msg = "YouTube is rate-limiting the server. Please wait a moment and try again." if status == 429 else str(e)
         return jsonify({"error": msg}), status
+
+
+_lyrics_cache = {}
+_lyrics_cache_lock = threading.Lock()
+LYRICS_CACHE_TTL = 86400  # 24 hours
+
+
+def _clean_artist(artist):
+    """Strip YouTube-style suffixes like '- Topic', 'VEVO', 'Official', etc."""
+    cleaned = re.sub(
+        r'(?i)\s*[-–]\s*(vevo|official|music|topic|channel|tv|records?|entertainment).*$',
+        '', artist
+    )
+    cleaned = re.sub(
+        r'(?i)\s*(vevo|official\s*channel|official\s*music)$',
+        '', cleaned
+    )
+    return cleaned.strip()
+
+
+def _detect_language(text):
+    try:
+        from langdetect import detect
+        return detect(text[:500])
+    except Exception:
+        return "en"
+
+
+def _translate_to_english(text, src_lang):
+    try:
+        from deep_translator import GoogleTranslator
+        if len(text) <= 4500:
+            result = GoogleTranslator(source=src_lang, target='en').translate(text)
+            return result
+        # Split into chunks preserving line boundaries
+        lines = text.split('\n')
+        chunks, current, current_len = [], [], 0
+        for line in lines:
+            if current_len + len(line) + 1 > 4500:
+                chunks.append('\n'.join(current))
+                current, current_len = [line], len(line)
+            else:
+                current.append(line)
+                current_len += len(line) + 1
+        if current:
+            chunks.append('\n'.join(current))
+        translated_parts = []
+        for chunk in chunks:
+            t = GoogleTranslator(source=src_lang, target='en').translate(chunk)
+            translated_parts.append(t or chunk)
+        return '\n'.join(translated_parts)
+    except Exception as e:
+        print(f"Translation error (Google): {e}")
+        # Fallback: MyMemory (handles up to ~500 chars per request)
+        try:
+            r = http_requests.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": text[:490], "langpair": f"{src_lang}|en"},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                return r.json().get("responseData", {}).get("translatedText")
+        except Exception:
+            pass
+        return None
+
+
+@app.route("/lyrics")
+def lyrics_route():
+    title = request.args.get("title", "").strip()
+    artist = request.args.get("artist", "").strip()
+    if not title:
+        return jsonify({"error": "missing title"}), 400
+
+    artist_clean = _clean_artist(artist)
+
+    cache_key = f"{artist_clean}|{title}".lower()
+    now = time.time()
+    with _lyrics_cache_lock:
+        entry = _lyrics_cache.get(cache_key)
+        if entry and entry["expires"] > now:
+            return jsonify(entry["data"])
+
+    # Try lyrics.ovh
+    lyrics_text = None
+    for a in ([artist_clean, ""] if artist_clean else [""]):
+        try:
+            a_enc = urllib.parse.quote(a) if a else urllib.parse.quote(title)
+            t_enc = urllib.parse.quote(title)
+            url = f"https://api.lyrics.ovh/v1/{a_enc}/{t_enc}"
+            r = http_requests.get(url, timeout=10)
+            if r.status_code == 200:
+                lyrics_text = r.json().get("lyrics", "").strip()
+                if lyrics_text:
+                    break
+        except Exception as e:
+            print(f"lyrics.ovh error: {e}")
+
+    if not lyrics_text:
+        return jsonify({"error": "Lyrics not found"}), 404
+
+    lang = _detect_language(lyrics_text)
+    translated = None
+    if lang != "en":
+        translated = _translate_to_english(lyrics_text, lang)
+
+    result = {
+        "lyrics": lyrics_text,
+        "translated": translated,
+        "language": lang,
+    }
+
+    with _lyrics_cache_lock:
+        _lyrics_cache[cache_key] = {"data": result, "expires": now + LYRICS_CACHE_TTL}
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":

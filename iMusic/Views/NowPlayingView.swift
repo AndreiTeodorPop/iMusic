@@ -11,6 +11,7 @@ struct NowPlayingView: View {
 
     @State private var showingQueue          = false
     @State private var showingPlaylistPicker = false
+    @State private var showingLyrics         = false
     @State private var toast: ToastType?
     @State private var toastTask: Task<Void, Never>?
 
@@ -136,6 +137,20 @@ struct NowPlayingView: View {
 
                 Spacer()
 
+                // Lyrics
+                Button { showingLyrics = true } label: {
+                    Image(systemName: "quote.bubble")
+                        .font(.title3)
+                        .foregroundStyle(.primary)
+                }
+                .fullScreenCover(isPresented: $showingLyrics) {
+                    LyricsFullScreenView(track: player.currentTrack)
+                        .environmentObject(player)
+                        .environmentObject(themeManager)
+                }
+
+                Spacer()
+
                 // Cast
                 AVRoutePickerButton()
 
@@ -214,6 +229,215 @@ struct NowPlayingView: View {
         }
     }
 
+}
+
+// MARK: - Lyrics Full Screen View
+
+private struct LyricsFullScreenView: View {
+    let track: Track?
+
+    @EnvironmentObject var player: AudioPlayer
+    @EnvironmentObject private var themeManager: ThemeManager
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var result: LyricsResult? = nil
+    @State private var isLoading = false
+    @State private var showTranslated = true
+
+    private var fetchKey: String {
+        guard let t = track else { return "" }
+        return "\(t.artist ?? "")|\(t.title)"
+    }
+
+    private var accentColor: Color { themeManager.current.accent }
+
+    var body: some View {
+        ZStack {
+            accentColor.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+
+                // MARK: Header
+                HStack(alignment: .center) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.title2.bold())
+                            .foregroundStyle(.white)
+                    }
+                    Spacer()
+                    VStack(spacing: 3) {
+                        Text(track?.title ?? "Lyrics")
+                            .font(.headline.bold())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text(track?.artist ?? "")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Color.clear.frame(width: 30, height: 30)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 20)
+
+                // MARK: Lyrics Content
+                Group {
+                    if isLoading {
+                        Spacer()
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.4)
+                        Spacer()
+                    } else if let r = result {
+                        let displayText = showTranslated ? r.englishText : r.original
+                        let lines = displayText
+                            .components(separatedBy: "\n")
+                            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+                        ScrollView(showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.title2.bold())
+                                        .foregroundStyle(.white)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 40)
+                        }
+                        // Fade-out at the bottom edge
+                        .mask(
+                            VStack(spacing: 0) {
+                                Rectangle()
+                                LinearGradient(
+                                    colors: [.black, .clear],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 80)
+                            }
+                        )
+                    } else {
+                        Spacer()
+                        VStack(spacing: 12) {
+                            Image(systemName: "quote.bubble")
+                                .font(.system(size: 50))
+                                .foregroundStyle(.white.opacity(0.5))
+                            Text("No lyrics found")
+                                .font(.headline)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        Spacer()
+                    }
+                }
+
+                // MARK: Bottom Controls
+                VStack(spacing: 14) {
+                    // Share / Translation toggle row
+                    HStack {
+                        // Share lyrics
+                        if let r = result {
+                            ShareLink(
+                                item: showTranslated ? r.englishText : r.original,
+                                subject: Text(track?.title ?? ""),
+                                message: Text("\(track?.artist ?? "") – \(track?.title ?? "")\n\n")
+                            ) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.title3)
+                                    .foregroundStyle(.white)
+                            }
+                        } else {
+                            Color.clear.frame(width: 30, height: 30)
+                        }
+
+                        Spacer()
+
+                        // Language toggle (only if translation is available)
+                        if let r = result, !r.isEnglish, r.translated != nil {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showTranslated.toggle()
+                                }
+                            } label: {
+                                Label(
+                                    showTranslated ? "Original" : "English",
+                                    systemImage: "globe"
+                                )
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(.white.opacity(0.2))
+                                .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 26)
+
+                    // Seek bar
+                    VStack(spacing: 6) {
+                        // White-tinted seek bar
+                        GeometryReader { geo in
+                            let progress = player.duration > 0
+                                ? min(player.currentTime / player.duration, 1)
+                                : 0
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(.white.opacity(0.3))
+                                    .frame(height: 4)
+                                Capsule()
+                                    .fill(.white)
+                                    .frame(width: max(0, geo.size.width * progress), height: 4)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture { location in
+                                let ratio = location.x / geo.size.width
+                                player.seek(to: ratio * player.duration)
+                            }
+                        }
+                        .frame(height: 18)
+
+                        HStack {
+                            Text(player.currentTime.mmss)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.7))
+                            Spacer()
+                            let remaining = max(0, player.duration - player.currentTime)
+                            Text("-\(remaining.mmss)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                    }
+                    .padding(.horizontal, 26)
+
+                    // Play / Pause
+                    Button { player.togglePlayPause() } label: {
+                        Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 72))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.bottom, 8)
+                }
+                .padding(.top, 12)
+                .padding(.bottom, 30)
+            }
+        }
+        .task(id: fetchKey) {
+            guard let track, !fetchKey.isEmpty else { result = nil; return }
+            isLoading = true
+            result = nil
+            showTranslated = true
+            result = await LyricsService.shared.fetch(
+                title: track.title,
+                artist: track.artist ?? ""
+            )
+            isLoading = false
+        }
+    }
 }
 
 // MARK: - Queue Sheet
