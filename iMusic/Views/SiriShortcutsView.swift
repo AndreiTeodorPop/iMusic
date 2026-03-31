@@ -7,7 +7,7 @@ struct SiriShortcutsView: View {
             icon: "play.circle",
             color: .orange,
             title: "Play a Song on YouTube",
-            phrase: "\"Search YouTube and immediately play the top result in iMusic\""
+            phrase: "\"Play a Song on YouTube in iMusic\""
         ),
         (
             icon: "music.note",

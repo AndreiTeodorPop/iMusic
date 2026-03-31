@@ -48,6 +48,11 @@ struct TrackCard: View {
     }
 }
 
+private struct PlaylistNavTarget: Identifiable, Hashable {
+    let id: UUID
+    let action: PlaylistDetailView.InitialAction
+}
+
 struct ContentView: View {
     @StateObject private var library = AudioLibrary()
     @EnvironmentObject private var player: AudioPlayer
@@ -60,8 +65,13 @@ struct ContentView: View {
     @State private var showingSiri = false
     @State private var selectedTab = 0
     @State private var showingSavedSongs = false
-    @State private var selectedPlaylistID: UUID?
+    @State private var selectedPlaylistNav: PlaylistNavTarget?
     @State private var showingPlaylistSearch = false
+    @State private var playlistToRename: Playlist?
+    @State private var renameText = ""
+    @State private var showingRenameAlert = false
+    @State private var playlistToDelete: Playlist?
+    @State private var showingDeletePlaylistConfirm = false
     @State private var playlistSortOrder: PlaylistSortOrder = .custom
     @State private var showingSortSheet = false
     @State private var showingDuplicatePlaylistAlert = false
@@ -334,8 +344,26 @@ struct ContentView: View {
             .navigationDestination(isPresented: $showingPlaylistSearch) {
                 PlaylistSearchView(library: library)
             }
-            .navigationDestination(item: $selectedPlaylistID) { id in
-                PlaylistDetailView(playlistID: id, library: library)
+            .navigationDestination(item: $selectedPlaylistNav) { nav in
+                PlaylistDetailView(playlistID: nav.id, library: library, initialAction: nav.action)
+            }
+            .alert("Do you want to delete \"\(playlistToDelete?.name ?? "")\" playlist?", isPresented: $showingDeletePlaylistConfirm) {
+                Button("Delete", role: .destructive) {
+                    if let p = playlistToDelete { library.deletePlaylist(p) }
+                    playlistToDelete = nil
+                }
+                Button("Cancel", role: .cancel) { playlistToDelete = nil }
+            } message: {
+                Text("This will remove the playlist but won't delete your songs.")
+            }
+            .alert("Edit Playlist", isPresented: $showingRenameAlert) {
+                TextField("Playlist name", text: $renameText)
+                Button("Cancel", role: .cancel) { playlistToRename = nil; renameText = "" }
+                Button("Save") {
+                    let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !name.isEmpty, let p = playlistToRename { library.renamePlaylist(p, to: name) }
+                    playlistToRename = nil; renameText = ""
+                }
             }
         }
     }
@@ -379,24 +407,20 @@ struct ContentView: View {
     private var playlistsSection: some View {
         Section {
             ForEach(sortedPlaylists) { playlist in
-                Button { selectedPlaylistID = playlist.id } label: {
-                    HStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(themeManager.current.accent.gradient)
-                            .frame(width: 50, height: 50)
-                            .overlay(Image(systemName: "music.note.list").foregroundColor(.white))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(playlist.name).font(.headline)
-                            Text("\(playlist.trackIDs.count) songs")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                    .foregroundStyle(.primary)
+                PlaylistLibraryRow(playlist: playlist) {
+                    selectedPlaylistNav = PlaylistNavTarget(id: playlist.id, action: .none)
+                } onAddSongs: {
+                    selectedPlaylistNav = PlaylistNavTarget(id: playlist.id, action: .addSongs)
+                } onSortSongs: {
+                    selectedPlaylistNav = PlaylistNavTarget(id: playlist.id, action: .sortSongs)
+                } onEdit: {
+                    playlistToRename = playlist
+                    renameText = playlist.name
+                    showingRenameAlert = true
+                } onDelete: {
+                    playlistToDelete = playlist
+                    showingDeletePlaylistConfirm = true
                 }
-                .buttonStyle(.plain)
             }
             .onDelete { indexSet in
                 for index in indexSet {
@@ -488,5 +512,127 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .onTapGesture { player.play(track: track) }
         // Context menu removed — add to playlist via SavedSongsView + button
+    }
+}
+
+// MARK: - Playlist Library Row
+
+private struct PlaylistLibraryRow: View {
+    let playlist: Playlist
+    let onTap: () -> Void
+    let onAddSongs: () -> Void
+    let onSortSongs: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @EnvironmentObject private var themeManager: ThemeManager
+    @State private var showingOptions = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onTap) {
+                HStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(themeManager.current.accent.gradient)
+                        .frame(width: 50, height: 50)
+                        .overlay(Image(systemName: "music.note.list").foregroundColor(.white))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(playlist.name).font(.headline)
+                        Text("\(playlist.trackIDs.count) songs")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+                .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Button { showingOptions = true } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showingOptions) {
+                PlaylistOptionsSheet(
+                    playlist: playlist,
+                    onAddSongs: { showingOptions = false; onAddSongs() },
+                    onSortSongs: { showingOptions = false; onSortSongs() },
+                    onEdit: { showingOptions = false; onEdit() },
+                    onDelete: { showingOptions = false; onDelete() }
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Playlist Options Sheet
+
+private struct PlaylistOptionsSheet: View {
+    let playlist: Playlist
+    let onAddSongs: () -> Void
+    let onSortSongs: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @EnvironmentObject private var themeManager: ThemeManager
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(themeManager.current.accent.gradient)
+                    .frame(width: 56, height: 56)
+                    .overlay(Image(systemName: "music.note.list").font(.title3).foregroundColor(.white))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(playlist.name)
+                        .font(.headline)
+                    Text("\(playlist.trackIDs.count) songs")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 24)
+            .padding(.bottom, 16)
+
+            Divider()
+
+            optionRow(icon: "plus.circle", title: "Add Songs",      action: onAddSongs)
+            Divider().padding(.leading, 60)
+            optionRow(icon: "arrow.up.arrow.down", title: "Sort Songs", action: onSortSongs)
+            Divider().padding(.leading, 60)
+            optionRow(icon: "pencil",      title: "Edit Playlist",  action: onEdit)
+            Divider().padding(.leading, 60)
+            optionRow(icon: "trash",       title: "Delete Playlist", isDestructive: true, action: onDelete)
+
+            Spacer()
+        }
+        .presentationDetents([.height(320)])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(20)
+    }
+
+    private func optionRow(icon: String, title: String, isDestructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .frame(width: 24)
+                    .foregroundStyle(isDestructive ? Color.red : Color.primary)
+                Text(title)
+                    .font(.body)
+                    .foregroundStyle(isDestructive ? Color.red : Color.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 15)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

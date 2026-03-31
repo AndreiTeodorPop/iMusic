@@ -3,12 +3,19 @@ import SwiftUI
 struct PlaylistDetailView: View {
     let playlistID: UUID
     @ObservedObject var library: AudioLibrary
+    var initialAction: InitialAction = .none
     @EnvironmentObject var player: AudioPlayer
     @EnvironmentObject private var themeManager: ThemeManager
+
+    enum InitialAction: Hashable {
+        case none, addSongs, sortSongs
+    }
 
     @State private var showingAddSongs = false
     @State private var showingDeleteConfirmation = false
     @State private var showingSortSheet = false
+    @State private var toast: ToastType?
+    @State private var toastTask: Task<Void, Never>?
     @State private var sortOrder: TrackSortOrder = .recentlyAdded
     @State private var searchText = ""
 
@@ -172,6 +179,14 @@ struct PlaylistDetailView: View {
                 }
                 } // end ScrollViewReader
 
+                // Toast overlay
+                if let t = toast {
+                    ToastView(toast: t)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                        .zIndex(20)
+                }
+
                 // Sort overlay — topmost layer
                 if showingSortSheet {
                     Color.black.opacity(0.4)
@@ -210,16 +225,17 @@ struct PlaylistDetailView: View {
                        let saved = TrackSortOrder(rawValue: raw) {
                         sortOrder = saved
                     }
+                    switch initialAction {
+                    case .addSongs:  showingAddSongs = true
+                    case .sortSongs: showingSortSheet = true
+                    case .none:      break
+                    }
                 }
                 .onChange(of: sortOrder) { _, newValue in
                     UserDefaults.standard.set(newValue.rawValue, forKey: sortKey)
                 }
-                .confirmationDialog(
-                    "Delete \"\(playlist.name)\"?",
-                    isPresented: $showingDeleteConfirmation,
-                    titleVisibility: .visible
-                ) {
-                    Button("Delete Playlist", role: .destructive) {
+                .alert("Do you want to delete this playlist?", isPresented: $showingDeleteConfirmation) {
+                    Button("Delete", role: .destructive) {
                         library.deletePlaylist(playlist)
                         dismiss()
                     }
@@ -230,7 +246,10 @@ struct PlaylistDetailView: View {
                 .sheet(isPresented: $showingAddSongs) {
                     AddSongsSheet(
                         tracks: tracksNotInPlaylist,
-                        onAdd: { track in library.addTrack(track, to: playlist) }
+                        onAdd: { track in
+                            library.addTrack(track, to: playlist)
+                            showToast(.success("Added to \"\(playlist.name)\""))
+                        }
                     )
                 }
             } else {
@@ -246,8 +265,21 @@ struct PlaylistDetailView: View {
             track: track,
             isCurrent: player.currentTrack?.id == track.id,
             onTap: { player.play(track: track, queue: tracksInPlaylist, playlistName: playlist.name) },
-            onRemove: { library.removeTrack(track, from: playlist) }
+            onRemove: {
+                library.removeTrack(track, from: playlist)
+                showToast(.success("Removed from playlist"))
+            }
         )
+    }
+
+    private func showToast(_ type: ToastType) {
+        toastTask?.cancel()
+        withAnimation(.spring(response: 0.3)) { toast = type }
+        toastTask = Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut) { toast = nil }
+        }
     }
 }
 

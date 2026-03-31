@@ -63,6 +63,12 @@ final class AudioLibrary: ObservableObject {
         objectWillChange.send()
     }
 
+    func renamePlaylist(_ playlist: Playlist, to newName: String) {
+        guard let index = playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        playlists[index].name = newName
+        savePlaylists()
+    }
+
     func deleteTrack(_ track: Track) async {
         if fileManager.fileExists(atPath: track.url.path) {
             try? fileManager.removeItem(at: track.url)

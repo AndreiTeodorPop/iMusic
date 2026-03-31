@@ -47,6 +47,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         youtubeHistory = []
         playlistQueue = []
         originalQueue = []
+        currentPlaylistName = nil
     }
 
     func clearYouTubeQueue() {

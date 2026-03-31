@@ -37,7 +37,11 @@ struct NowPlayingView: View {
                     Text("Now Playing")
                         .font(.headline)
                         .foregroundStyle(.secondary)
-                    if let name = player.currentPlaylistName {
+                    if player.currentTrack?.youtubeVideoID != nil {
+                        Label("YouTube", systemImage: "play.rectangle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    } else if let name = player.currentPlaylistName {
                         Label(name, systemImage: "music.note.list")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
@@ -155,7 +159,7 @@ struct NowPlayingView: View {
             Spacer()
         }
         .padding(.bottom, 40)
-        .overlay(alignment: .bottom) { toastOverlay }
+        .overlay(alignment: .center) { toastOverlay }
     }
 
     // MARK: - Add to Playlist Button
@@ -206,8 +210,7 @@ struct NowPlayingView: View {
     private var toastOverlay: some View {
         if let t = toast {
             ToastView(toast: t)
-                .padding(.bottom, 50)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
         }
     }
 
