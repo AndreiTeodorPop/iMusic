@@ -281,6 +281,11 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         clearYouTubeQueue()
         stop()
         do {
+            // Activate the audio session before loading — if it isn't active,
+            // player.play() silently returns false and the song appears to stop.
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try AVAudioSession.sharedInstance().setActive(true)
+
             let player = try AVAudioPlayer(contentsOf: track.url)
             self.player = player
             self.currentTrack = track
@@ -296,7 +301,56 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             if !started { schedulePlayRetry() }
         } catch {
             print("AudioPlayer error: \(error)")
+            // AVAudioPlayer can't parse this file (e.g. VBR MP3 without Xing header).
+            // Fall back to AVPlayer which uses a more permissive decoder.
+            playLocalWithAVPlayer(track: track)
         }
+    }
+
+    /// Plays a local file through AVPlayer when AVAudioPlayer fails to parse it.
+    private func playLocalWithAVPlayer(track: Track) {
+        stopStreamPlayer()
+        let asset = AVURLAsset(url: track.url)
+        let item  = AVPlayerItem(asset: asset)
+        streamPlayer = AVPlayer(playerItem: item)
+        streamPlayer?.automaticallyWaitsToMinimizeStalling = false
+
+        currentTrack = track
+        duration     = track.duration ?? 0
+        currentTime  = 0
+        isPlaying    = true
+
+        streamPlayer?.play()
+        attachStreamTimeObserver()
+
+        streamEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.playNext() }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.stopStreamPlayer()
+                if !self.playlistQueue.isEmpty { self.playNext() }
+            }
+        }
+
+        // Load precise duration from asset asynchronously
+        Task { @MainActor [weak self] in
+            if let d = try? await asset.load(.duration), d.isNumeric {
+                self?.duration = d.seconds
+            }
+        }
+
+        startTimer()
+        updateNowPlayingInfo()
+        saveLastPlayed()
     }
 
     func togglePlayPause() {
@@ -576,6 +630,9 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     if p.play() { self.isPlaying = true; self.startTimer(); self.updateNowPlayingInfo() }
                 }
             }
+            // All retries exhausted and still not playing — skip to the next track.
+            guard let self, !self.isActuallyPlaying, !self.playlistQueue.isEmpty else { return }
+            self.playNext()
         }
     }
 

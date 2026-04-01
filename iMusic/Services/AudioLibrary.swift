@@ -145,32 +145,73 @@ final class AudioLibrary: ObservableObject {
 
     // MARK: - Metadata
 
-    /// Overwrites the cached title and artist for a local track, then rebuilds
-    /// the in-memory track list so every view picks up the change immediately.
-    /// AVFoundation tags on the file itself are *not* modified — only the app's
-    /// metadata cache, which is what drives display everywhere in the app.
+    /// Updates the title/artist for a local track. If the title changed, the
+    /// file is renamed on disk and playlist/liked-track memberships are migrated
+    /// to the new filename-derived UUID automatically.
     func updateTrackMetadata(_ track: Track, title: String, artist: String?) {
-        let path = track.url.path
-        var cache = loadMetaCache()
-        guard let existing = cache[path] else { return }
-        cache[path] = CachedMeta(
-            title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? track.title : title.trimmingCharacters(in: .whitespacesAndNewlines),
-            artist: artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? artist?.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
-            album: existing.album,
-            duration: existing.duration,
-            modDate: existing.modDate
+        let newTitle  = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? track.title
+                        : title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newArtist = artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? artist?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        : nil
+
+        var cache    = loadMetaCache()
+        let oldPath  = track.url.path
+        // Fall back to a synthetic entry so edits always succeed even on a cold cache.
+        let existing = cache[oldPath] ?? CachedMeta(
+            title: track.title, artist: track.artist,
+            album: track.album, duration: track.duration, modDate: Date()
+        )
+
+        // ── Rename the file when the title changed ────────────────────────────
+        var newURL = track.url
+        if newTitle != track.title {
+            let ext      = track.url.pathExtension
+            let safe     = newTitle
+                .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|"))
+                .joined(separator: "_")
+            let newName  = ext.isEmpty ? safe : "\(safe).\(ext)"
+            let candidate = track.url.deletingLastPathComponent()
+                                     .appendingPathComponent(newName)
+            if !fileManager.fileExists(atPath: candidate.path),
+               (try? fileManager.moveItem(at: track.url, to: candidate)) != nil {
+                newURL = candidate
+            }
+        }
+
+        // ── Migrate cache from old path to new path ───────────────────────────
+        let newPath = newURL.path
+        if newPath != oldPath { cache.removeValue(forKey: oldPath) }
+        cache[newPath] = CachedMeta(
+            title: newTitle, artist: newArtist,
+            album: existing.album, duration: existing.duration, modDate: existing.modDate
         )
         saveMetaCache(cache)
-        // Rebuild the in-memory track array with the updated metadata
+
+        // ── Migrate playlists and liked IDs when the UUID changed ─────────────
+        if newPath != oldPath {
+            let newTrack = Track(url: newURL, title: newTitle, artist: newArtist,
+                                 album: existing.album, duration: existing.duration)
+            let oldID = track.id
+            let newID = newTrack.id
+            for i in playlists.indices where playlists[i].trackIDs.contains(oldID) {
+                playlists[i].trackIDs.remove(oldID)
+                playlists[i].trackIDs.insert(newID)
+            }
+            savePlaylists()
+            if likedTrackIDs.contains(oldID) {
+                likedTrackIDs.remove(oldID)
+                likedTrackIDs.insert(newID)
+                saveLikedTrackIDs()
+            }
+        }
+
+        // ── Rebuild the in-memory track list ──────────────────────────────────
         tracks = tracks.map { t in
             guard t.id == track.id else { return t }
-            return Track(
-                url: t.url,
-                title: cache[path]!.title,
-                artist: cache[path]!.artist,
-                album: cache[path]!.album,
-                duration: cache[path]!.duration
-            )
+            return Track(url: newURL, title: newTitle, artist: newArtist,
+                         album: existing.album, duration: existing.duration)
         }
     }
 
