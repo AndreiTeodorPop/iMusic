@@ -96,26 +96,54 @@ def _fetch_info_with_retry(video_id, max_retries=3):
     raise last_err
 
 
-def _warmup_cache():
-    """Pre-download and cache the YouTube JS player at startup so the first real
-    user request doesn't need to fetch it (and hit rate limits)."""
-    try:
-        opts = {
-            "quiet": True,
-            "logger": _QuietLogger(),
-            "cachedir": YTDLP_CACHE_DIR,
-            "format": "bestaudio/best",
-            "extractor_args": {"youtube": {"player_client": ["web"]}},
-        }
-        if os.path.exists(COOKIES_FILE):
-            opts["cookiefile"] = COOKIES_FILE
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
-        print("yt-dlp JS player cache warmed up successfully", flush=True)
-    except Exception as e:
-        print(f"yt-dlp warm-up failed (non-fatal): {e}", flush=True)
+# Invidious public instances — tried in order when yt-dlp fails.
+# These run their own extraction and return pre-solved YouTube stream URLs.
+_INVIDIOUS_INSTANCES = [
+    "https://inv.nadeko.net",
+    "https://invidious.fdn.fr",
+    "https://yt.drgnz.club",
+    "https://invidious.privacyredirect.com",
+]
 
-threading.Thread(target=_warmup_cache, daemon=True).start()
+
+def _fetch_info_invidious(video_id):
+    """Fetch stream URL from Invidious API (no signature solving required)."""
+    for base in _INVIDIOUS_INSTANCES:
+        try:
+            r = http_requests.get(
+                f"{base}/api/v1/videos/{video_id}",
+                headers={"User-Agent": "iMusic/1.0"},
+                timeout=8,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if "error" in data:
+                continue
+
+            # Prefer adaptive audio-only formats; fall back to muxed streams
+            formats = data.get("adaptiveFormats", []) + data.get("formatStreams", [])
+            audio = [f for f in formats if "audio" in f.get("type", "") and "video" not in f.get("type", "")]
+            if not audio:
+                audio = formats
+            if not audio:
+                continue
+
+            best = max(audio, key=lambda f: int(f.get("bitrate", 0)))
+            url = best.get("url")
+            if not url:
+                continue
+
+            return {
+                "url":      url,
+                "title":    data.get("title", ""),
+                "artist":   data.get("author", ""),
+                "duration": int(data.get("lengthSeconds", 0)),
+                "expires":  time.time() + CACHE_TTL,
+            }
+        except Exception:
+            continue
+    return None
 
 
 def _get_info(video_id):
@@ -125,15 +153,28 @@ def _get_info(video_id):
         if entry and entry["expires"] > now:
             return entry
 
-    info = _fetch_info_with_retry(video_id)
+    entry = None
 
-    entry = {
-        "url":      info["url"],
-        "title":    info.get("title", ""),
-        "artist":   info.get("uploader", ""),
-        "duration": info.get("duration", 0),
-        "expires":  now + CACHE_TTL,
-    }
+    # Try yt-dlp first (best quality when the server IP is not rate-limited)
+    try:
+        info = _fetch_info_with_retry(video_id)
+        entry = {
+            "url":      info["url"],
+            "title":    info.get("title", ""),
+            "artist":   info.get("uploader", ""),
+            "duration": info.get("duration", 0),
+            "expires":  now + CACHE_TTL,
+        }
+    except Exception:
+        pass
+
+    # Fall back to Invidious (pre-solved URLs, works around rate-limited IPs)
+    if not entry:
+        entry = _fetch_info_invidious(video_id)
+
+    if not entry:
+        raise Exception("Could not fetch stream from YouTube or Invidious")
+
     with _cache_lock:
         _cache[video_id] = entry
     return entry
