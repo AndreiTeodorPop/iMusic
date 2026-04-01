@@ -31,7 +31,7 @@ CACHE_TTL = 3600  # YouTube URLs expire in ~6h; refresh after 1h to be safe
 def _fetch_info_with_retry(video_id, max_retries=3):
     opts = {
         "quiet": True,
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best[height<=480]/best",
         "retries": 3,
         "extractor_retries": 3,
         "sleep_interval": 2,
@@ -153,7 +153,7 @@ def download():
 
     opts = {
         "quiet": True,
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best[height<=480]/best",
         "outtmpl": output_template,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
