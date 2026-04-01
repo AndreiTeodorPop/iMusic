@@ -31,7 +31,7 @@ def _fetch_info_with_retry(video_id, max_retries=3):
         # android client works without PO tokens on headless servers
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "android_creator", "tv_embedded"]
+                "player_client": ["android"]
             }
         },
     }
