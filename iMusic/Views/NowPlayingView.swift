@@ -240,9 +240,12 @@ private struct LyricsFullScreenView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.dismiss) private var dismiss
 
-    @State private var result: LyricsResult? = nil
+    @State private var syncedLines: [LyricLine]? = nil
+    @State private var plainResult: LyricsResult? = nil
     @State private var isLoading = false
     @State private var showTranslated = true
+    @State private var userIsScrolling = false
+    @State private var scrollResumeTask: Task<Void, Never>? = nil
 
     private var fetchKey: String {
         guard let t = track else { return "" }
@@ -250,6 +253,16 @@ private struct LyricsFullScreenView: View {
     }
 
     private var accentColor: Color { themeManager.current.accent }
+
+    private var activeLineIndex: Int? {
+        guard let lines = syncedLines, !lines.isEmpty else { return nil }
+        let t = player.currentTime
+        var result: Int? = nil
+        for (i, line) in lines.enumerated() {
+            if line.timestamp <= t { result = i } else { break }
+        }
+        return result
+    }
 
     var body: some View {
         ZStack {
@@ -290,7 +303,16 @@ private struct LyricsFullScreenView: View {
                             .tint(.white)
                             .scaleEffect(1.4)
                         Spacer()
-                    } else if let r = result {
+                    } else if let lines = syncedLines, !lines.isEmpty {
+                        SyncedLyricsScrollView(
+                            lines: lines,
+                            activeIndex: activeLineIndex,
+                            userIsScrolling: $userIsScrolling,
+                            onTap: { line in
+                                player.seek(to: line.timestamp)
+                            }
+                        )
+                    } else if let r = plainResult {
                         let displayText = showTranslated ? r.englishText : r.original
                         let lines = displayText
                             .components(separatedBy: "\n")
@@ -309,7 +331,6 @@ private struct LyricsFullScreenView: View {
                             .padding(.horizontal, 20)
                             .padding(.bottom, 40)
                         }
-                        // Fade-out at the bottom edge
                         .mask(
                             VStack(spacing: 0) {
                                 Rectangle()
@@ -337,10 +358,8 @@ private struct LyricsFullScreenView: View {
 
                 // MARK: Bottom Controls
                 VStack(spacing: 14) {
-                    // Share / Translation toggle row
                     HStack {
-                        // Share lyrics
-                        if let r = result {
+                        if let r = plainResult, syncedLines == nil {
                             ShareLink(
                                 item: showTranslated ? r.englishText : r.original,
                                 subject: Text(track?.title ?? ""),
@@ -356,8 +375,7 @@ private struct LyricsFullScreenView: View {
 
                         Spacer()
 
-                        // Language toggle (only if translation is available)
-                        if let r = result, !r.isEnglish, r.translated != nil {
+                        if let r = plainResult, syncedLines == nil, !r.isEnglish, r.translated != nil {
                             Button {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     showTranslated.toggle()
@@ -378,9 +396,7 @@ private struct LyricsFullScreenView: View {
                     }
                     .padding(.horizontal, 26)
 
-                    // Seek bar
                     VStack(spacing: 6) {
-                        // White-tinted seek bar
                         GeometryReader { geo in
                             let progress = player.duration > 0
                                 ? min(player.currentTime / player.duration, 1)
@@ -414,7 +430,6 @@ private struct LyricsFullScreenView: View {
                     }
                     .padding(.horizontal, 26)
 
-                    // Play / Pause
                     Button { player.togglePlayPause() } label: {
                         Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 72))
@@ -427,16 +442,111 @@ private struct LyricsFullScreenView: View {
             }
         }
         .task(id: fetchKey) {
-            guard let track, !fetchKey.isEmpty else { result = nil; return }
+            guard let track, !fetchKey.isEmpty else {
+                syncedLines = nil
+                plainResult = nil
+                return
+            }
             isLoading = true
-            result = nil
+            syncedLines = nil
+            plainResult = nil
             showTranslated = true
-            result = await LyricsService.shared.fetch(
+
+            async let synced = LyricsService.shared.fetchSynced(
                 title: track.title,
                 artist: track.artist ?? ""
             )
+            async let plain = LyricsService.shared.fetch(
+                title: track.title,
+                artist: track.artist ?? ""
+            )
+
+            let (syncedResult, plainFetched) = await (synced, plain)
+            syncedLines = syncedResult
+            plainResult = plainFetched
             isLoading = false
         }
+    }
+}
+
+// MARK: - Synced Lyrics Scroll View
+
+private struct SyncedLyricsScrollView: View {
+    let lines: [LyricLine]
+    let activeIndex: Int?
+    @Binding var userIsScrolling: Bool
+    let onTap: (LyricLine) -> Void
+
+    @State private var scrollResumeTask: Task<Void, Never>? = nil
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    ForEach(lines) { line in
+                        let isActive = activeIndex == line.id
+                        let isPast = activeIndex.map { line.id <= $0 } ?? false
+
+                        Group {
+                            if line.text.isEmpty {
+                                Color.clear.frame(height: 4)
+                            } else {
+                                Text(line.text)
+                                    .font(.title2.bold())
+                                    .foregroundStyle(
+                                        isActive
+                                            ? .white
+                                            : isPast
+                                                ? .white.opacity(0.55)
+                                                : .white.opacity(0.3)
+                                    )
+                                    .scaleEffect(isActive ? 1.04 : 1.0, anchor: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isActive)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        onTap(line)
+                                    }
+                            }
+                        }
+                        .id(line.id)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 40)
+                .padding(.top, 8)
+            }
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { _ in
+                        userIsScrolling = true
+                        scrollResumeTask?.cancel()
+                        scrollResumeTask = Task {
+                            try? await Task.sleep(for: .seconds(4))
+                            guard !Task.isCancelled else { return }
+                            userIsScrolling = false
+                        }
+                    }
+            )
+            .onChange(of: activeIndex) { _, newIndex in
+                guard !userIsScrolling, let index = newIndex else { return }
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    proxy.scrollTo(index, anchor: .center)
+                }
+            }
+        }
+        .mask(
+            VStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(
+                    colors: [.black, .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 80)
+            }
+        )
     }
 }
 
