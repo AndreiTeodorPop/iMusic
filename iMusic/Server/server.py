@@ -34,11 +34,22 @@ _FORMAT_FALLBACKS = [
     "best",
 ]
 
-# Only "web" supports cookies and can solve JS signatures (requires Node.js installed).
-# android/mweb now require a GVS PO Token for HTTPS formats — useless without one.
+# Profile 1: web with cookies (best quality, needs Node.js for JS challenges).
+# Profile 2: android + mweb without cookies — GVS PO Token warnings are non-fatal;
+#            HLS/non-HTTPS formats still work and act as a reliable fallback.
 _CLIENT_PROFILES = [
     (["web"], True),
+    (["android", "mweb"], False),
 ]
+
+
+class _QuietLogger:
+    """Suppress yt-dlp warnings (PO Token noise, signature warnings, etc).
+    Errors are still printed so real failures are visible."""
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): print(msg, flush=True)
 
 
 def _fetch_info_with_retry(video_id, max_retries=3):
@@ -48,6 +59,7 @@ def _fetch_info_with_retry(video_id, max_retries=3):
     for clients, use_cookies in _CLIENT_PROFILES:
         base_opts = {
             "quiet": True,
+            "logger": _QuietLogger(),
             "retries": 3,
             "extractor_retries": 3,
             "sleep_interval": 2,
@@ -175,6 +187,7 @@ def download():
     for clients, use_cookies in _CLIENT_PROFILES:
         dl_base = {
             "quiet": True,
+            "logger": _QuietLogger(),
             "outtmpl": output_template,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
@@ -278,10 +291,12 @@ def related():
             "extract_flat": True,
             "skip_download": True,
             "playlistend": 11,
+            "quiet": True,
+            "logger": _QuietLogger(),
             "nocheckcertificate": True,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["web", "ios"]
+                    "player_client": ["web", "android"]
                 }
             },
             **( {"cookiefile": COOKIES_FILE} if os.path.exists(COOKIES_FILE) else {} ),
