@@ -19,10 +19,18 @@ _cache = {}
 _cache_lock = threading.Lock()
 CACHE_TTL = 3600  # YouTube URLs expire in ~6h; refresh after 1h to be safe
 
+class _QuietLogger:
+    """Fully silent yt-dlp logger — yt-dlp failures are expected and handled
+    by the Invidious fallback, so we don't need noise in the console."""
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
 
 def _fetch_info_with_retry(video_id, max_retries=3):
     opts = {
         "quiet": True,
+        "logger": _QuietLogger(),
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "retries": 3,
         "extractor_retries": 3,
@@ -31,7 +39,7 @@ def _fetch_info_with_retry(video_id, max_retries=3):
         # android client works without PO tokens on headless servers
         "extractor_args": {
             "youtube": {
-                "player_client": ["android"]
+                "player_client": ["android", "android_creator", "tv_embedded"]
             }
         },
     }
@@ -142,6 +150,7 @@ def download():
 
     opts = {
         "quiet": True,
+        "logger": _QuietLogger(),
         "format": "bestaudio/best",
         "outtmpl": output_template,
         "postprocessors": [{
@@ -222,6 +231,7 @@ def related():
 
         search_opts = {
             "quiet": True,
+            "logger": _QuietLogger(),
             "extract_flat": True,
             "skip_download": True,
             "playlistend": 11,
