@@ -334,20 +334,39 @@ def lyrics_route():
         if entry and entry["expires"] > now:
             return jsonify(entry["data"])
 
-    # Try lyrics.ovh
+    # 1. Try lrclib.net (free, no key, best coverage)
     lyrics_text = None
-    for a in ([artist_clean, ""] if artist_clean else [""]):
-        try:
-            a_enc = urllib.parse.quote(a) if a else urllib.parse.quote(title)
-            t_enc = urllib.parse.quote(title)
-            url = f"https://api.lyrics.ovh/v1/{a_enc}/{t_enc}"
-            r = http_requests.get(url, timeout=10)
-            if r.status_code == 200:
-                lyrics_text = r.json().get("lyrics", "").strip()
-                if lyrics_text:
+    try:
+        r = http_requests.get(
+            "https://lrclib.net/api/search",
+            params={"track_name": title, "artist_name": artist_clean or title},
+            headers={"Lrclib-Client": "iMusic/1.0"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            items = r.json()
+            for item in items:
+                text = item.get("plainLyrics", "").strip()
+                if text:
+                    lyrics_text = text
                     break
-        except Exception as e:
-            print(f"lyrics.ovh error: {e}")
+    except Exception as e:
+        print(f"lrclib error: {e}")
+
+    # 2. Fallback: lyrics.ovh
+    if not lyrics_text:
+        for a in ([artist_clean, ""] if artist_clean else [""]):
+            try:
+                a_enc = urllib.parse.quote(a) if a else urllib.parse.quote(title)
+                t_enc = urllib.parse.quote(title)
+                url = f"https://api.lyrics.ovh/v1/{a_enc}/{t_enc}"
+                r = http_requests.get(url, timeout=10)
+                if r.status_code == 200:
+                    lyrics_text = r.json().get("lyrics", "").strip()
+                    if lyrics_text:
+                        break
+            except Exception as e:
+                print(f"lyrics.ovh error: {e}")
 
     if not lyrics_text:
         return jsonify({"error": "Lyrics not found"}), 404
