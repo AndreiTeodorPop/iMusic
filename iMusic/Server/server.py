@@ -35,10 +35,11 @@ _FORMAT_FALLBACKS = [
 ]
 
 # Each attempt profile: (client_list, use_cookies)
-# android/ios don't support cookies, so we try web+ios with cookies first,
-# then android without cookies as a last resort.
+# Only the "web" client supports cookies; ios/android/mweb do not.
+# With Node.js installed, "web" can solve JS signatures and get full format access.
+# android + mweb are cookie-free fallbacks in case the web client is rate-limited.
 _CLIENT_PROFILES = [
-    (["web", "ios"], True),
+    (["web"], True),
     (["android", "mweb"], False),
 ]
 

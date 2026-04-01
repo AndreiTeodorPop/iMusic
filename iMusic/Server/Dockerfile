@@ -1,8 +1,8 @@
 # Use slim Python 3.11
 FROM python:3.11-slim
 
-# Install ffmpeg
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install ffmpeg and Node.js (required by yt-dlp for YouTube signature solving)
+RUN apt-get update && apt-get install -y ffmpeg nodejs && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
