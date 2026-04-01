@@ -1,8 +1,11 @@
 # Use slim Python 3.11
 FROM python:3.11-slim
 
-# Install ffmpeg and Node.js (required by yt-dlp for YouTube signature solving)
-RUN apt-get update && apt-get install -y ffmpeg nodejs && rm -rf /var/lib/apt/lists/*
+# Install ffmpeg and Node.js (required by yt-dlp for YouTube signature/n-challenge solving).
+# Debian installs the binary as "nodejs"; yt-dlp looks for "node" — symlink bridges the gap.
+RUN apt-get update && apt-get install -y ffmpeg nodejs && \
+    ln -sf /usr/bin/nodejs /usr/local/bin/node && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app

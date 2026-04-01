@@ -34,13 +34,10 @@ _FORMAT_FALLBACKS = [
     "best",
 ]
 
-# Each attempt profile: (client_list, use_cookies)
-# Only the "web" client supports cookies; ios/android/mweb do not.
-# With Node.js installed, "web" can solve JS signatures and get full format access.
-# android + mweb are cookie-free fallbacks in case the web client is rate-limited.
+# Only "web" supports cookies and can solve JS signatures (requires Node.js installed).
+# android/mweb now require a GVS PO Token for HTTPS formats — useless without one.
 _CLIENT_PROFILES = [
     (["web"], True),
-    (["android", "mweb"], False),
 ]
 
 
