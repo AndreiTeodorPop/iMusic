@@ -43,11 +43,14 @@ _CLIENT_PROFILES = [
     (["ios"], False),
 ]
 
-# HLS (m3u8) formats are pre-signed and need no JS decryption — ideal for ios client.
+# Prefer direct HTTPS m4a streams (non-fragmented, non-DASH, non-HLS).
+# Fragmented MP4 / DASH streams cause AVFoundation to report double duration on iOS,
+# resulting in silence in the second half of playback.
+# protocol=https selects progressive-download streams that proxy cleanly.
 _FORMAT_FALLBACKS = [
-    "bestaudio[protocol=m3u8_native]/bestaudio[protocol=m3u8]/bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-    "bestaudio[protocol=m3u8_native]/bestaudio[protocol=m3u8]/bestaudio/best",
-    "best[protocol=m3u8_native]/best[protocol=m3u8]/best",
+    "bestaudio[ext=m4a][protocol=https]/bestaudio[ext=m4a]/bestaudio[protocol=https]/bestaudio[ext=webm]/bestaudio/best",
+    "bestaudio[ext=m4a]/bestaudio/best",
+    "best",
 ]
 
 
