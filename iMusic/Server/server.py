@@ -317,42 +317,31 @@ def download():
         if info is not None:
             break  # got a result, skip remaining client profiles
 
-    # If yt-dlp failed for all profiles, try downloading via pytubefix
+    # If yt-dlp failed for all profiles, get the direct URL via pytubefix
+    # and feed it back into yt-dlp for download + ffmpeg conversion.
     if info is None:
         pytubefix_info = _fetch_info_pytubefix(video_id)
         if pytubefix_info:
             yt_url = pytubefix_info["url"]
-            title = pytubefix_info.get("title") or video_id
-            safe_title = re.sub(r'[/\\:*?"<>|]', '_', title)
-            raw_path = os.path.join(tmp_dir, f"{safe_title}.m4a")
-            headers = {
-                "User-Agent": "Mozilla/5.0 (compatible)",
-                "Accept": "*/*",
-                "Accept-Encoding": "identity",
+            dl_opts = {
+                "quiet": True,
+                "logger": _QuietLogger(),
+                "outtmpl": output_template,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+                "keepvideo": False,
+                **({"ffmpeg_location": FFMPEG_DIR} if FFMPEG_DIR else {}),
             }
             try:
-                r_dl = http_requests.get(yt_url, headers=headers, stream=True, timeout=120)
-                if r_dl.status_code == 200:
-                    with open(raw_path, 'wb') as fout:
-                        for chunk in r_dl.iter_content(chunk_size=65536):
-                            if chunk:
-                                fout.write(chunk)
-                    mp3_path = os.path.join(tmp_dir, f"{safe_title}.mp3")
-                    import subprocess
-                    result = subprocess.run(
-                        [FFMPEG_LOCATION or "ffmpeg", "-i", raw_path, "-q:a", "2", "-y", mp3_path],
-                        capture_output=True, timeout=180
-                    )
-                    final_path = mp3_path if (result.returncode == 0 and os.path.exists(mp3_path)) else raw_path
-                    return send_file(
-                        final_path,
-                        mimetype="audio/mpeg",
-                        as_attachment=True,
-                        download_name=f"{title}.mp3"
-                    )
+                with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                    info = ydl.extract_info(yt_url, download=True)
             except Exception as e:
-                print(f"[pytubefix/download] {e}", flush=True)
-        raise last_err
+                print(f"[pytubefix/download] yt-dlp re-download failed: {e}", flush=True)
+        if info is None:
+            raise last_err
 
     try:
         title = info.get("title", video_id)
