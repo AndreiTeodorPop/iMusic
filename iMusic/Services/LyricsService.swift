@@ -192,11 +192,10 @@ actor LyricsService {
                 // Require at least 3 non-empty lines — reject page metadata
                 guard lines.count >= 3 else { continue }
 
-                let lang = detectLanguage(lyrics)
-                var translated: String? = nil
-                if lang != "en" && lang != "unknown" {
-                    translated = await translateViaServer(text: lyrics, lang: lang)
-                }
+                // Let the server auto-detect language (more accurate than on-device
+                // NLLanguageRecognizer for mixed-language lyrics like French rap).
+                let (translated, detectedLang) = await translateViaServer(text: lyrics)
+                let lang = detectedLang ?? detectLanguage(lyrics)
                 return LyricsResult(original: lyrics, translated: translated, language: lang)
             }
         } catch {}
@@ -210,18 +209,22 @@ actor LyricsService {
         return recognizer.dominantLanguage?.rawValue ?? "unknown"
     }
 
-    /// Asks the server to translate `text` from `lang` to English.
-    private func translateViaServer(text: String, lang: String) async -> String? {
-        guard let url = URL(string: "https://imusic-production-4e58.up.railway.app/translate") else { return nil }
+    /// Asks the server to auto-detect language and translate `text` to English.
+    /// Returns `(translation, detectedLanguage)` — translation may be nil if English or failed.
+    private func translateViaServer(text: String) async -> (String?, String?) {
+        guard let url = URL(string: "https://imusic-production-4e58.up.railway.app/translate") else { return (nil, nil) }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "lang": lang])
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
         guard let (data, response) = try? await URLSession.shared.data(for: req),
               (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let result = json["translated"] as? String else { return nil }
-        return result
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (nil, nil)
+        }
+        let translated = json["translated"] as? String
+        let lang = json["language"] as? String
+        return (translated, lang)
     }
 
     private func extractGeniusLyrics(from html: String) -> String? {

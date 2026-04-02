@@ -418,7 +418,7 @@ def _detect_language(text):
 
 def _translate_to_english(text, src_lang):
     """Translate lyrics to English using the unofficial Google Translate API.
-    More reliable than deep_translator — direct HTTP, no library anti-bot issues."""
+    Returns None if translation fails or is identical to the source."""
     if not text or src_lang == 'en':
         return None
 
@@ -431,10 +431,12 @@ def _translate_to_english(text, src_lang):
             )
             if r.status_code == 200:
                 data = r.json()
-                return ''.join(item[0] for item in data[0] if item and item[0])
+                result = ''.join(item[0] for item in data[0] if item and item[0])
+                if result and result.strip() != chunk.strip():
+                    return result
         except Exception as e:
             print(f"Translation chunk error: {e}")
-        return chunk
+        return None  # None = failed, caller should keep original or skip
 
     if len(text) <= 4500:
         return _translate_chunk(text)
@@ -453,7 +455,9 @@ def _translate_to_english(text, src_lang):
     if current:
         chunks.append('\n'.join(current))
 
-    return '\n'.join(_translate_chunk(c) for c in chunks)
+    parts = [_translate_chunk(c) or c for c in chunks]
+    result = '\n'.join(parts)
+    return result if result.strip() != text.strip() else None
 
 
 def _fetch_from_genius(title, artist):
@@ -577,6 +581,11 @@ def lyrics_route():
             items = r.json()
             for item in items:
                 text = item.get("plainLyrics", "").strip()
+                if not text:
+                    # Many non-English songs only have syncedLyrics — strip timestamps
+                    synced = item.get("syncedLyrics", "").strip()
+                    if synced:
+                        text = re.sub(r'\[\d+:\d+\.\d+\]\s*', '', synced).strip()
                 if text:
                     lyrics_text = text
                     break
@@ -624,19 +633,25 @@ def lyrics_route():
 
 @app.route("/translate", methods=["POST"])
 def translate_route():
-    """Translate arbitrary text to English. Used by the iOS client when it fetches
-    lyrics from a third-party source (e.g. Genius) and needs translation."""
+    """Translate arbitrary text to English. Auto-detects the source language
+    (more accurate than client-side detection for mixed-language lyrics)."""
     body = request.get_json(silent=True) or {}
     text = body.get("text", "").strip()
-    lang = body.get("lang", "").strip()
-    if not text or not lang or lang == "en":
-        return jsonify({"error": "missing or invalid parameters"}), 400
+    if not text:
+        return jsonify({"error": "missing text"}), 400
+
+    # Always auto-detect on the server — langdetect is more accurate for lyrics
+    # than NLLanguageRecognizer on iOS, especially for mixed-language content.
+    lang = _detect_language(text)
+
+    if lang == "en":
+        return jsonify({"translated": None, "language": "en"})
 
     translated = _translate_to_english(text, lang)
     if not translated:
-        return jsonify({"error": "Translation failed"}), 500
+        return jsonify({"translated": None, "language": lang})
 
-    return jsonify({"translated": translated})
+    return jsonify({"translated": translated, "language": lang})
 
 
 if __name__ == "__main__":
