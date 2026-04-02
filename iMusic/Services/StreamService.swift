@@ -13,8 +13,8 @@ struct StreamService {
 
     private static let downloadSession: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest  = 120
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForRequest  = 300
+        config.timeoutIntervalForResource = 600
         return URLSession(configuration: config)
     }()
 

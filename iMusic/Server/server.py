@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 import yt_dlp
 import os
 import re
+import subprocess
 import tempfile
 import shutil
 import time
@@ -116,14 +117,12 @@ def _fetch_info_pytubefix(video_id):
 
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # Clients ordered by likelihood of bypassing bot detection on cloud IPs.
-    # TV_EMBED uses the embedded TV player API which is less aggressively filtered.
-    # ANDROID_VR is also less restricted than WEB.
+    # ANDROID_VR is the only client that reliably bypasses bot detection on cloud IPs.
+    # Other clients (TV_EMBED=429, WEB/ANDROID_VR_BOT=bot detected, IOS=400,
+    # WEB_EMBED=unavailable, ANDROID_MUSIC=login required) are kept as fallbacks.
     _PYTUBEFIX_CLIENTS = [
-        "TV_EMBED",
         "ANDROID_VR",
         "ANDROID_MUSIC",
-        "IOS",
         "WEB_EMBED",
         "WEB",
     ]
@@ -267,111 +266,55 @@ def download():
     if not video_id:
         return jsonify({"error": "missing id"}), 400
 
-    tmp_dir = tempfile.mkdtemp()
-    output_template = os.path.join(tmp_dir, "%(title)s.%(ext)s")
+    # yt-dlp always fails with bot detection on this server IP.
+    # Go straight to pytubefix to get the direct CDN audio URL.
+    info = _fetch_info_pytubefix(video_id)
+    if not info:
+        return jsonify({"error": "Could not fetch audio URL"}), 500
 
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    last_err = None
-    info = None
+    yt_url = info["url"]
+    title = info.get("title") or video_id
+    safe_title = re.sub(r'[/\\:*?"<>|]', '_', title)
 
-    for clients, use_cookies in _CLIENT_PROFILES:
-        player_skip = ["webpage"] if use_cookies else ["webpage", "configs", "js"]
-        dl_base = {
-            "quiet": True,
-            "logger": _QuietLogger(),
-            "cachedir": YTDLP_CACHE_DIR,
-            "outtmpl": output_template,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
-            "keepvideo": False,
-            "nocheckcertificate": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": clients,
-                    "player_skip": player_skip,
-                }
-            },
-            **({"ffmpeg_location": FFMPEG_DIR} if FFMPEG_DIR else {}),
-        }
-        if use_cookies and os.path.exists(COOKIES_FILE):
-            dl_base["cookiefile"] = COOKIES_FILE
-
-        for fmt in _FORMAT_FALLBACKS:
-            opts = {**dl_base, "format": fmt}
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                break  # success
-            except Exception as e:
-                last_err = e
-                err_str = str(e)
-                if "Requested format is not available" in err_str or \
-                   "Only images are available" in err_str or \
-                   "Sign in to confirm" in err_str:
-                    break  # this profile won't work, try next
-                raise  # unexpected error — surface immediately
-
-        if info is not None:
-            break  # got a result, skip remaining client profiles
-
-    # If yt-dlp failed for all profiles, get the direct URL via pytubefix
-    # and feed it back into yt-dlp for download + ffmpeg conversion.
-    if info is None:
-        pytubefix_info = _fetch_info_pytubefix(video_id)
-        if pytubefix_info:
-            yt_url = pytubefix_info["url"]
-            dl_opts = {
-                "quiet": True,
-                "logger": _QuietLogger(),
-                "outtmpl": output_template,
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }],
-                "keepvideo": False,
-                **({"ffmpeg_location": FFMPEG_DIR} if FFMPEG_DIR else {}),
-            }
-            try:
-                with yt_dlp.YoutubeDL(dl_opts) as ydl:
-                    info = ydl.extract_info(yt_url, download=True)
-            except Exception as e:
-                print(f"[pytubefix/download] yt-dlp re-download failed: {e}", flush=True)
-        if info is None:
-            raise last_err
+    # Stream ffmpeg output directly to the client — no temp file needed.
+    # ffmpeg fetches the CDN URL and converts to mp3 on-the-fly.
+    # Data starts flowing to the client within seconds, avoiding iOS URLSession timeouts.
+    ffmpeg_cmd = [
+        FFMPEG_LOCATION or "ffmpeg",
+        "-headers", "User-Agent: Mozilla/5.0 (compatible)\r\nAccept: */*\r\n",
+        "-i", yt_url,
+        "-vn",          # audio only
+        "-f", "mp3",
+        "-q:a", "2",
+        "pipe:1",
+    ]
 
     try:
-        title = info.get("title", video_id)
-
-        files = os.listdir(tmp_dir)
-        if not files:
-            return jsonify({"error": "download produced no file"}), 500
-
-        file_path = os.path.join(tmp_dir, files[0])
-
-        return send_file(
-            file_path,
-            mimetype="audio/mpeg",
-            as_attachment=True,
-            download_name=f"{title}.mp3"
+        proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    finally:
-        for f in os.listdir(tmp_dir):
-            try:
-                os.remove(os.path.join(tmp_dir, f))
-            except Exception:
-                pass
+    def generate():
         try:
-            os.rmdir(tmp_dir)
-        except Exception:
-            pass
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            proc.stdout.close()
+            proc.wait()
+
+    print(f"[download] {video_id} → streaming ffmpeg mp3", flush=True)
+    return Response(
+        stream_with_context(generate()),
+        mimetype="audio/mpeg",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}.mp3"'},
+    )
 
 
 @app.route("/related")
