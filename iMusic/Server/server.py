@@ -417,42 +417,118 @@ def _detect_language(text):
 
 
 def _translate_to_english(text, src_lang):
-    try:
-        from deep_translator import GoogleTranslator
-        if len(text) <= 4500:
-            result = GoogleTranslator(source=src_lang, target='en').translate(text)
-            return result
-        # Split into chunks preserving line boundaries
-        lines = text.split('\n')
-        chunks, current, current_len = [], [], 0
-        for line in lines:
-            if current_len + len(line) + 1 > 4500:
-                chunks.append('\n'.join(current))
-                current, current_len = [line], len(line)
-            else:
-                current.append(line)
-                current_len += len(line) + 1
-        if current:
-            chunks.append('\n'.join(current))
-        translated_parts = []
-        for chunk in chunks:
-            t = GoogleTranslator(source=src_lang, target='en').translate(chunk)
-            translated_parts.append(t or chunk)
-        return '\n'.join(translated_parts)
-    except Exception as e:
-        print(f"Translation error (Google): {e}")
-        # Fallback: MyMemory (handles up to ~500 chars per request)
+    """Translate lyrics to English using the unofficial Google Translate API.
+    More reliable than deep_translator — direct HTTP, no library anti-bot issues."""
+    if not text or src_lang == 'en':
+        return None
+
+    def _translate_chunk(chunk):
         try:
             r = http_requests.get(
-                "https://api.mymemory.translated.net/get",
-                params={"q": text[:490], "langpair": f"{src_lang}|en"},
-                timeout=10,
+                "https://translate.googleapis.com/translate_a/single",
+                params={"client": "gtx", "sl": src_lang, "tl": "en", "dt": "t", "q": chunk},
+                timeout=15,
             )
             if r.status_code == 200:
-                return r.json().get("responseData", {}).get("translatedText")
-        except Exception:
-            pass
-        return None
+                data = r.json()
+                return ''.join(item[0] for item in data[0] if item and item[0])
+        except Exception as e:
+            print(f"Translation chunk error: {e}")
+        return chunk
+
+    if len(text) <= 4500:
+        return _translate_chunk(text)
+
+    # Split into ≤4500-char chunks on line boundaries
+    lines = text.split('\n')
+    chunks, current, current_len = [], [], 0
+    for line in lines:
+        if current_len + len(line) + 1 > 4500:
+            if current:
+                chunks.append('\n'.join(current))
+            current, current_len = [line], len(line)
+        else:
+            current.append(line)
+            current_len += len(line) + 1
+    if current:
+        chunks.append('\n'.join(current))
+
+    return '\n'.join(_translate_chunk(c) for c in chunks)
+
+
+def _fetch_from_genius(title, artist):
+    """Fetch plain lyrics from Genius — best coverage for non-English content
+    (Russian, Japanese, French, Italian, Hungarian, Mongolian, etc.)."""
+    from html.parser import HTMLParser
+
+    class _GeniusParser(HTMLParser):
+        """Collects text from <div data-lyrics-container="true"> blocks."""
+        def __init__(self):
+            super().__init__()
+            self._active = False
+            self._depth = 0
+            self._parts = []
+            self._buf = []
+
+        def handle_starttag(self, tag, attrs):
+            d = dict(attrs)
+            if tag == 'div' and d.get('data-lyrics-container') == 'true':
+                self._active = True
+                self._depth = 1
+            elif self._active:
+                if tag == 'div':
+                    self._depth += 1
+                elif tag in ('br',):
+                    self._buf.append('\n')
+
+        def handle_endtag(self, tag):
+            if self._active and tag == 'div':
+                self._depth -= 1
+                if self._depth == 0:
+                    self._parts.append(''.join(self._buf))
+                    self._buf = []
+                    self._active = False
+
+        def handle_data(self, data):
+            if self._active:
+                self._buf.append(data)
+
+        def lyrics(self):
+            combined = '\n'.join(self._parts)
+            return re.sub(r'\n{3,}', '\n\n', combined).strip()
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        q = f"{artist} {title}" if artist else title
+        r = http_requests.get(
+            "https://genius.com/api/search",
+            params={"q": q},
+            headers=headers,
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        hits = r.json().get("response", {}).get("hits", [])
+        for hit in hits[:3]:
+            if hit.get("type") != "song":
+                continue
+            path = hit.get("result", {}).get("path", "")
+            if not path:
+                continue
+            page = http_requests.get(f"https://genius.com{path}", headers=headers, timeout=15)
+            if page.status_code != 200:
+                continue
+            parser = _GeniusParser()
+            parser.feed(page.text)
+            text = parser.lyrics()
+            if text:
+                return text
+    except Exception as e:
+        print(f"Genius error: {e}")
+    return None
 
 
 @app.route("/lyrics")
@@ -504,6 +580,10 @@ def lyrics_route():
                         break
             except Exception as e:
                 print(f"lyrics.ovh error: {e}")
+
+    # 3. Fallback: Genius — best non-English coverage (Russian, Japanese, etc.)
+    if not lyrics_text:
+        lyrics_text = _fetch_from_genius(title, artist_clean or artist)
 
     if not lyrics_text:
         return jsonify({"error": "Lyrics not found"}), 404

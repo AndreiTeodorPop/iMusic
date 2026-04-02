@@ -100,6 +100,11 @@ actor LyricsService {
             return result
         }
 
+        if let result = await fetchFromGenius(title: cleanedTitle, artist: cleanedArtist) {
+            cache[key] = result
+            return result
+        }
+
         if let result = await fetchFromLyricsOvh(title: cleanedTitle, artist: cleanedArtist) {
             cache[key] = result
             return result
@@ -132,6 +137,101 @@ actor LyricsService {
         } catch {
             return nil
         }
+    }
+
+    private func fetchFromGenius(title: String, artist: String) async -> LyricsResult? {
+        let query = "\(artist) \(title)"
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
+        guard let searchUrl = URL(string: "https://genius.com/api/search?q=\(query)") else { return nil }
+
+        var searchReq = URLRequest(url: searchUrl)
+        searchReq.setValue(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            forHTTPHeaderField: "User-Agent"
+        )
+        do {
+            let (data, response) = try await URLSession.shared.data(for: searchReq)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let resp    = json["response"] as? [String: Any],
+                  let hits    = resp["hits"] as? [[String: Any]] else { return nil }
+
+            for hit in hits.prefix(3) {
+                guard hit["type"] as? String == "song",
+                      let result = hit["result"] as? [String: Any],
+                      let path   = result["path"] as? String,
+                      let pageUrl = URL(string: "https://genius.com\(path)") else { continue }
+
+                var pageReq = URLRequest(url: pageUrl)
+                pageReq.setValue(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    forHTTPHeaderField: "User-Agent"
+                )
+                let (pageData, pageResponse) = try await URLSession.shared.data(for: pageReq)
+                guard (pageResponse as? HTTPURLResponse)?.statusCode == 200,
+                      let html = String(data: pageData, encoding: .utf8) else { continue }
+
+                if let lyrics = extractGeniusLyrics(from: html), !lyrics.isEmpty {
+                    return LyricsResult(original: lyrics, translated: nil, language: "unknown")
+                }
+            }
+        } catch {}
+        return nil
+    }
+
+    private func extractGeniusLyrics(from html: String) -> String? {
+        var parts: [String] = []
+        var remaining = html[html.startIndex...]
+
+        while let attrRange = remaining.range(of: "data-lyrics-container=\"true\"") {
+            // Find the opening tag's closing >
+            guard let tagClose = remaining.range(of: ">", range: attrRange.upperBound..<remaining.endIndex)
+            else { break }
+
+            // Walk forward counting <div>/<div> depth to find the matching </div>
+            var depth = 1
+            var cursor = tagClose.upperBound
+            var buffer = ""
+
+            while cursor < remaining.endIndex && depth > 0 {
+                if remaining[cursor...].hasPrefix("<br") {
+                    buffer += "\n"
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else if remaining[cursor...].hasPrefix("<div") {
+                    depth += 1
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else if remaining[cursor...].hasPrefix("</div") {
+                    depth -= 1
+                    if depth == 0 { break }
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else if remaining[cursor] == "<" {
+                    // skip any other tag
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else {
+                    buffer.append(remaining[cursor])
+                }
+                cursor = remaining.index(after: cursor)
+            }
+
+            let cleaned = buffer
+                .replacingOccurrences(of: "&#x27;", with: "'")
+                .replacingOccurrences(of: "&amp;",  with: "&")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty { parts.append(cleaned) }
+            remaining = remaining[cursor...]
+        }
+
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "\n\n")
     }
 
     private func fetchFromLyricsOvh(title: String, artist: String) async -> LyricsResult? {
