@@ -2,6 +2,7 @@ flask
 gunicorn
 yt-dlp
 pytubefix
+bgutil-ytdlp-pot-provider
 requests
 langdetect
 deep-translator

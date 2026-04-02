@@ -34,11 +34,12 @@ _cache_lock = threading.Lock()
 CACHE_TTL = 3600  # YouTube URLs expire in ~6h; refresh after 1h to be safe
 
 
-# Profile 1: web with cookies + persistent JS player cache for signature solving.
-# Profile 2: ios without cookies — uses Apple's API (HLS streams, no signature needed).
-#            Only attempted if web fails; ios hits bot detection on rate-limited IPs.
+# Profile 1: web with cookies + bgutil PO token provider for bot detection bypass.
+# Profile 2: tv_embedded — YouTube TV embedded player API, less aggressively filtered.
+# Profile 3: ios — Apple's API (HLS, no signature needed), last resort.
 _CLIENT_PROFILES = [
     (["web"], True),
+    (["tv_embedded"], False),
     (["ios"], False),
 ]
 
@@ -113,10 +114,11 @@ def _fetch_info_pytubefix(video_id):
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Clients ordered by likelihood of bypassing bot detection on cloud IPs.
-    # ANDROID_VR / ANDROID_EMBED use endpoints that are less aggressively filtered.
+    # TV_EMBED uses the embedded TV player API which is less aggressively filtered.
+    # ANDROID_VR is also less restricted than WEB.
     _PYTUBEFIX_CLIENTS = [
+        "TV_EMBED",
         "ANDROID_VR",
-        "ANDROID_EMBED",
         "ANDROID_MUSIC",
         "IOS",
         "WEB_EMBED",
@@ -312,7 +314,41 @@ def download():
         if info is not None:
             break  # got a result, skip remaining client profiles
 
+    # If yt-dlp failed for all profiles, try downloading via pytubefix
     if info is None:
+        pytubefix_info = _fetch_info_pytubefix(video_id)
+        if pytubefix_info:
+            yt_url = pytubefix_info["url"]
+            title = pytubefix_info.get("title") or video_id
+            safe_title = re.sub(r'[/\\:*?"<>|]', '_', title)
+            raw_path = os.path.join(tmp_dir, f"{safe_title}.m4a")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible)",
+                "Accept": "*/*",
+                "Accept-Encoding": "identity",
+            }
+            try:
+                r_dl = http_requests.get(yt_url, headers=headers, stream=True, timeout=120)
+                if r_dl.status_code == 200:
+                    with open(raw_path, 'wb') as fout:
+                        for chunk in r_dl.iter_content(chunk_size=65536):
+                            if chunk:
+                                fout.write(chunk)
+                    mp3_path = os.path.join(tmp_dir, f"{safe_title}.mp3")
+                    import subprocess
+                    result = subprocess.run(
+                        [FFMPEG_LOCATION or "ffmpeg", "-i", raw_path, "-q:a", "2", "-y", mp3_path],
+                        capture_output=True, timeout=180
+                    )
+                    final_path = mp3_path if (result.returncode == 0 and os.path.exists(mp3_path)) else raw_path
+                    return send_file(
+                        final_path,
+                        mimetype="audio/mpeg",
+                        as_attachment=True,
+                        download_name=f"{title}.mp3"
+                    )
+            except Exception as e:
+                print(f"[pytubefix/download] {e}", flush=True)
         raise last_err
 
     try:
