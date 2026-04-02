@@ -32,6 +32,16 @@ struct PlayYouTubeIntent: AppIntent {
                 duration: stream.duration, videoID: first.id
             )
         }
+        // Wait up to 5 s for the stream to start buffering before returning.
+        // This ensures the player is already running when Siri speaks its TTS
+        // response and interrupts the audio session — resuming after that works
+        // correctly. Without this wait, play() is called on a freshly created
+        // player that hasn't buffered yet, and the post-interruption resume fails.
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(500))
+            let playing = await MainActor.run { AudioPlayer.shared.isActuallyPlaying }
+            if playing { break }
+        }
         return .result()
     }
 }

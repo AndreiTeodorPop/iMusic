@@ -370,8 +370,13 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func togglePlayPause() {
         if let sp = streamPlayer {
-            if isPlaying { sp.pause(); isPlaying = false; stopTimer() }
-            else         { sp.play();  isPlaying = true;  startTimer() }
+            if isPlaying {
+                sp.pause(); isPlaying = false; stopTimer()
+            } else {
+                // Re-activate the audio session before resuming (covers post-Siri-TTS interruption)
+                try? AVAudioSession.sharedInstance().setActive(true)
+                sp.play(); isPlaying = true; startTimer()
+            }
             updateNowPlayingInfo()
             return
         }
