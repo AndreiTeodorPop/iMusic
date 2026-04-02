@@ -224,9 +224,11 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             } catch {
                 print("Asset load error: \(error)")
             }
-            // Load real duration from the asset — server may return 0 when
-            // metadata extraction was skipped (player_skip / pytubefix).
-            if let d = try? await asset.load(.duration), d.isNumeric, d.seconds > 1 {
+            // Only load duration from the asset if the server returned 0 —
+            // the MP4 container duration from YouTube DASH/fragmented streams
+            // can be double the real length, which would cause silence at the midpoint.
+            if (self?.duration ?? 0) < 1,
+               let d = try? await asset.load(.duration), d.isNumeric, d.seconds > 1 {
                 self?.duration = d.seconds
                 self?.updateNowPlayingInfo()
             }
