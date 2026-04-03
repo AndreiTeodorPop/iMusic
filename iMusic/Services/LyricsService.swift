@@ -97,6 +97,13 @@ actor LyricsService {
         let key = "\(cleanedArtist)|\(cleanedTitle)".lowercased()
         if let hit = cache[key] { return hit }
 
+        // Google first — real device IPs are not blocked
+        if let result = await fetchFromGoogle(title: cleanedTitle, artist: cleanedArtist) {
+            cache[key] = result
+            return result
+        }
+
+        // Server: lrclib → lyrics.ovh → Genius (with translation)
         if let result = await fetchFromBackend(title: cleanedTitle, artist: cleanedArtist) {
             cache[key] = result
             return result
@@ -140,6 +147,103 @@ actor LyricsService {
         } catch {
             return nil
         }
+    }
+
+    private func fetchFromGoogle(title: String, artist: String) async -> LyricsResult? {
+        let q = "\(artist) \(title) lyrics"
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard !q.isEmpty,
+              let url = URL(string: "https://www.google.com/search?q=\(q)&hl=en") else { return nil }
+
+        var req = URLRequest(url: url)
+        req.setValue(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            forHTTPHeaderField: "User-Agent"
+        )
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        req.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let html = String(data: data, encoding: .utf8) else { return nil }
+
+            guard let lyrics = extractGoogleLyrics(from: html), !lyrics.isEmpty else { return nil }
+
+            let (translated, detectedLang) = await translateViaServer(text: lyrics)
+            let lang = detectedLang ?? detectLanguage(lyrics)
+            return LyricsResult(original: lyrics, translated: translated, language: lang, source: "Google")
+        } catch { return nil }
+    }
+
+    private func extractGoogleLyrics(from html: String) -> String? {
+        var lines: [String] = []
+        var remaining = html[html.startIndex...]
+
+        // Google lyrics panel uses data-attrid containing "lyrics"
+        while let attrRange = remaining.range(of: "data-attrid=\"", options: .caseInsensitive) {
+            // Get the attribute value
+            let afterAttr = remaining[attrRange.upperBound...]
+            guard let closeQuote = afterAttr.range(of: "\"") else { break }
+            let attrValue = String(afterAttr[afterAttr.startIndex..<closeQuote.lowerBound])
+
+            guard attrValue.lowercased().contains("lyrics") else {
+                // Skip to after this attribute
+                remaining = remaining[closeQuote.upperBound...]
+                continue
+            }
+
+            // Find the opening tag's >
+            guard let tagClose = remaining.range(of: ">", range: attrRange.upperBound..<remaining.endIndex)
+            else { break }
+
+            // Walk the div depth to extract all text
+            var depth = 1
+            var cursor = tagClose.upperBound
+            var buffer = ""
+
+            while cursor < remaining.endIndex && depth > 0 {
+                if remaining[cursor...].hasPrefix("<br") {
+                    buffer += "\n"
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else if remaining[cursor...].hasPrefix("<div") {
+                    depth += 1
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else if remaining[cursor...].hasPrefix("</div") {
+                    depth -= 1
+                    if depth == 0 { break }
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else if remaining[cursor] == "<" {
+                    if let end = remaining.range(of: ">", range: cursor..<remaining.endIndex) {
+                        cursor = end.upperBound; continue
+                    }
+                } else {
+                    buffer.append(remaining[cursor])
+                }
+                cursor = remaining.index(after: cursor)
+            }
+
+            let cleaned = buffer
+                .replacingOccurrences(of: "&#x27;", with: "'")
+                .replacingOccurrences(of: "&amp;",  with: "&")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty {
+                lines.append(contentsOf: cleaned.components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty })
+            }
+            remaining = remaining[cursor...]
+        }
+
+        guard lines.count >= 3 else { return nil }
+        return lines.joined(separator: "\n")
     }
 
     private func fetchFromGenius(title: String, artist: String) async -> LyricsResult? {

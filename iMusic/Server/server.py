@@ -460,78 +460,6 @@ def _translate_to_english(text, src_lang):
     return result if result.strip() != text.strip() else None
 
 
-def _fetch_from_google(title, artist):
-    """Fetch lyrics from Google Search knowledge panel."""
-    from html.parser import HTMLParser
-
-    q = f"{artist} {title} lyrics" if artist else f"{title} lyrics"
-    try:
-        r = http_requests.get(
-            "https://www.google.com/search",
-            params={"q": q, "hl": "en", "gl": "us"},
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return None
-
-        html_text = r.text
-
-        class _GoogleLyricsParser(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self._in_lyrics = False
-                self._depth = 0
-                self._parts = []
-                self._buf = []
-
-            def handle_starttag(self, tag, attrs):
-                d = dict(attrs)
-                if 'lyrics' in d.get('data-attrid', '').lower():
-                    self._in_lyrics = True
-                    self._depth = 1
-                    return
-                if self._in_lyrics:
-                    if tag == 'div':
-                        self._depth += 1
-                    elif tag == 'br':
-                        self._buf.append('\n')
-
-            def handle_endtag(self, tag):
-                if not self._in_lyrics:
-                    return
-                if tag == 'div':
-                    self._depth -= 1
-                    if self._depth <= 0:
-                        if self._buf:
-                            self._parts.append(''.join(self._buf))
-                            self._buf = []
-                        self._in_lyrics = False
-                        self._depth = 0
-
-            def handle_data(self, data):
-                if self._in_lyrics:
-                    self._buf.append(data)
-
-            def result(self):
-                combined = '\n'.join(self._parts)
-                return re.sub(r'\n{3,}', '\n\n', combined).strip()
-
-        parser = _GoogleLyricsParser()
-        parser.feed(html_text)
-        lyrics = parser.result()
-
-        if lyrics and len(lyrics.split('\n')) >= 3:
-            return lyrics
-    except Exception as e:
-        print(f"Google lyrics error: {e}")
-    return None
-
-
 def _fetch_from_genius(title, artist):
     """Fetch plain lyrics from Genius — best coverage for non-English content
     (Russian, Japanese, French, Italian, Hungarian, Mongolian, etc.)."""
@@ -643,12 +571,7 @@ def lyrics_route():
     lyrics_text = None
     source = None
 
-    # 1. Google knowledge panel — best coverage, most accurate
-    lyrics_text = _fetch_from_google(title, artist_clean or artist)
-    if lyrics_text:
-        source = "Google"
-
-    # 2. Fallback: lrclib.net (great for synced content)
+    # 1. lrclib.net (great for synced content)
     if not lyrics_text:
         try:
             r = http_requests.get(
@@ -672,7 +595,7 @@ def lyrics_route():
         except Exception as e:
             print(f"lrclib error: {e}")
 
-    # 3. Fallback: lyrics.ovh
+    # 2. Fallback: lyrics.ovh
     if not lyrics_text:
         for a in ([artist_clean, ""] if artist_clean else [""]):
             try:
@@ -688,7 +611,7 @@ def lyrics_route():
             except Exception as e:
                 print(f"lyrics.ovh error: {e}")
 
-    # 4. Fallback: Genius — best non-English coverage (Russian, Japanese, etc.)
+    # 3. Fallback: Genius — best non-English coverage (Russian, Japanese, etc.)
     if not lyrics_text:
         lyrics_text = _fetch_from_genius(title, artist_clean or artist)
         if lyrics_text:
