@@ -134,8 +134,9 @@ actor LyricsService {
             let decoded = try JSONDecoder().decode(PlainResponse.self, from: data)
             var translated = decoded.translated
             var language   = decoded.language
-            // If server returned no translation (old deploy or detection failed), translate client-side
-            if translated == nil && language != "en" && language != "unknown" {
+            // If server returned no translation, try client-side — covers romanized non-English
+            // text that langdetect mis-labels as "en" (e.g. transliterated Mongolian).
+            if translated == nil && language != "unknown" {
                 let (t, l) = await translateViaServer(text: decoded.lyrics)
                 translated = t
                 if let l { language = l }

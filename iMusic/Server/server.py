@@ -419,7 +419,7 @@ def _detect_language(text):
 def _translate_to_english(text, src_lang):
     """Translate lyrics to English using the unofficial Google Translate API.
     Returns None if translation fails or is identical to the source."""
-    if not text or src_lang == 'en':
+    if not text:
         return None
 
     def _translate_chunk(chunk):
@@ -655,9 +655,10 @@ def lyrics_route():
         return jsonify({"error": "Lyrics not found"}), 404
 
     lang = _detect_language(lyrics_text)
-    translated = None
-    if lang != "en":
-        translated = _translate_to_english(lyrics_text, lang)
+    # Always attempt translation with sl=auto — Google correctly handles romanized
+    # non-English text (e.g. transliterated Mongolian) that langdetect mis-labels as "en".
+    # The function returns None when the translation is identical to the source (actual English).
+    translated = _translate_to_english(lyrics_text, lang)
 
     result = {
         "lyrics": lyrics_text,
@@ -684,10 +685,8 @@ def translate_route():
     # Always auto-detect on the server — langdetect is more accurate for lyrics
     # than NLLanguageRecognizer on iOS, especially for mixed-language content.
     lang = _detect_language(text)
-
-    if lang == "en":
-        return jsonify({"translated": None, "language": "en"})
-
+    # Always attempt translation — sl=auto lets Google handle romanized non-English
+    # text that langdetect mis-labels as "en" (e.g. transliterated Mongolian).
     translated = _translate_to_english(text, lang)
     if not translated:
         return jsonify({"translated": None, "language": lang})
