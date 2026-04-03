@@ -23,6 +23,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private var interruptionObserver: Any?
     private var routeChangeObserver: Any?
+    private var foregroundObserver: Any?
     private var wasPlayingBeforeInterruption: Bool = false
 
     // Local track queue
@@ -40,6 +41,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var streamPlayer: AVPlayer?
     private var streamTimeObserver: Any?
     private var streamEndObserver: Any?
+    private var timeControlObserver: NSKeyValueObservation?
 
     // MARK: - YouTube Queue
 
@@ -159,11 +161,14 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard taskID != .invalid else { return }
         Task { @MainActor [weak self] in
             defer { UIApplication.shared.endBackgroundTask(taskID) }
-            // Poll until the stream is actually playing or we time out (~30 s / 0.5 s = 60 ticks)
+            // Poll until the stream is *actually producing audio* (.playing), not just buffering
+            // (.waitingToPlayAtSpecifiedRate). Ending the task too early while buffering lets iOS
+            // deprioritize the app before AVPlayer finishes starting, causing silence until foreground.
             for _ in 0..<60 {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard let self else { return }
-                if self.isActuallyPlaying { return }
+                if let sp = self.streamPlayer, sp.timeControlStatus == .playing { return }
+                if self.player?.isPlaying == true { return }
             }
         }
     }
@@ -185,7 +190,17 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
         streamPlayer = AVPlayer(playerItem: item)
-        streamPlayer?.automaticallyWaitsToMinimizeStalling = false
+
+        // Observe real playback state so the lock-screen timer rate stays accurate.
+        // When the stream stalls (e.g., while the screen is locked), AVPlayer transitions
+        // to .waitingToPlayAtSpecifiedRate or .paused. We update MPNowPlayingInfo so iOS
+        // stops extrapolating the lock-screen timer forward during silence.
+        timeControlObserver = streamPlayer?.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.streamPlayer === player else { return }
+                self.updateNowPlayingInfo()
+            }
+        }
 
         currentTrack = Track(
             url: url,
@@ -199,6 +214,12 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         currentTime = 0
         isPlaying = true
 
+        // Explicitly activate the audio session before starting the new player.
+        // Between stopStreamPlayer() and this play() call there is a momentary gap
+        // where no audio is active; without this, iOS can silently deactivate the
+        // session and the new AVPlayer will buffer but never produce output.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+        try? AVAudioSession.sharedInstance().setActive(true)
         streamPlayer?.play()
         beginStreamBackgroundTask()
         schedulePlayRetry()
@@ -245,6 +266,8 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             NotificationCenter.default.removeObserver(obs)
             streamEndObserver = nil
         }
+        timeControlObserver?.invalidate()
+        timeControlObserver = nil
         streamPlayer = nil
     }
 
@@ -435,6 +458,7 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if !youtubeQueue.isEmpty {
             guard !isLoadingNextYouTube else { return }
             isLoadingNextYouTube = true
+            beginStreamBackgroundTask() // keep app alive during stream URL fetch
 
             // Push current track to history before moving forward
             if let track = currentTrack, let videoID = track.youtubeVideoID {
@@ -446,8 +470,9 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 youtubeIndex += 1
                 let next = youtubeQueue[youtubeIndex]
                 Task {
-                    await streamYouTubeResult(next)
+                    let started = await streamYouTubeResult(next)
                     isLoadingNextYouTube = false
+                    if !started { playNext() } // stream fetch failed — try the one after it
                 }
             } else {
                 // Queue exhausted — fetch suggestions
@@ -474,22 +499,49 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         guard let track = currentTrack else { stop(); return }
 
-        // Build a Spotify-Radio-style discovery query:
-        // "songs similar to <title> <artist>" surfaces genre/mood matches
-        // rather than same-artist uploads from YouTube's related API.
-        let cleanTitle = LyricsService.shared.cleanTitle(track.title)
+        // Build a discovery query that avoids returning more versions of the same song.
+        // Using the song title causes YouTube to return the Official Video, Lyrics version,
+        // Audio version, etc. — all the same track. Searching by artist name instead finds
+        // the artist's other songs and similar artists, giving genuine variety.
         let artist = track.artist ?? ""
+        let cleanTitle = LyricsService.shared.cleanTitle(track.title)
         let query: String
         if artist.isEmpty {
-            query = "songs similar to \(cleanTitle)"
+            query = "music similar to \(cleanTitle)"
         } else {
-            query = "songs similar to \(cleanTitle) \(artist)"
+            query = "music similar to \(artist)"
         }
+
+        // Channel of the song that just finished — used to avoid suggesting more from the same uploader.
+        let currentChannel = youtubeIndex < youtubeQueue.count
+            ? youtubeQueue[youtubeIndex].channelTitle.lowercased()
+            : artist.lowercased()
 
         do {
             var results = try await YouTubeService.search(query)
-            // Exclude already-played and currently playing
-            results = results.filter { !playedYouTubeIDs.contains($0.id) && $0.id != videoID }
+
+            // 1. Exclude already-played and the current track.
+            //    If history has grown so large that everything is filtered, reset it.
+            let notPlayed = results.filter { !playedYouTubeIDs.contains($0.id) && $0.id != videoID }
+            if notPlayed.isEmpty && !results.isEmpty {
+                playedYouTubeIDs.removeAll()
+                results = results.filter { $0.id != videoID }
+            } else {
+                results = notPlayed
+            }
+
+            // 2. Prefer results from a different channel than the one currently playing
+            //    so the radio doesn't just loop through the same uploader's catalogue.
+            if !currentChannel.isEmpty {
+                let differentChannel = results.filter {
+                    let ch = $0.channelTitle.lowercased()
+                    return !ch.contains(currentChannel) && !currentChannel.contains(ch)
+                }
+                if !differentChannel.isEmpty { results = differentChannel }
+                // If every result is from the same channel, fall through with unfiltered set
+                // so playback doesn't stop entirely.
+            }
+
             // Shuffle for variety so repeat listens feel fresh
             results.shuffle()
             guard !results.isEmpty else { stop(); return }
@@ -510,7 +562,15 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             stop()
         } catch {
             print("Suggestion search failed: \(error)")
-            stop()
+            // Network hiccup — don't stop, just leave the queue intact so the user
+            // can manually skip or wait. If we have more in the current queue, try next.
+            if youtubeIndex + 1 < youtubeQueue.count {
+                youtubeIndex += 1
+                let next = youtubeQueue[youtubeIndex]
+                _ = await streamYouTubeResult(next)
+            } else {
+                stop()
+            }
         }
     }
 
@@ -545,10 +605,12 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     /// Fetches the stream URL for a YouTube result and plays it.
-    private func streamYouTubeResult(_ result: YouTubeResult) async {
+    /// Returns true if playback started successfully.
+    @discardableResult
+    private func streamYouTubeResult(_ result: YouTubeResult) async -> Bool {
         do {
             let stream = try await StreamService.getStreamURL(for: result.id)
-            guard let url = URL(string: stream.url) else { return }
+            guard let url = URL(string: stream.url) else { return false }
             playYouTube(
                 url: url,
                 title: stream.title,
@@ -556,8 +618,10 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 duration: stream.duration,
                 videoID: result.id
             )
+            return true
         } catch {
             print("Failed to stream YouTube result: \(error)")
+            return false
         }
     }
 
@@ -612,6 +676,23 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         ) { [weak self] n in
             MainActor.assumeIsolated { self?.handleRouteChange(n) }
         }
+        // Safety net: if a song-transition stalled in background (player was buffering when
+        // the app had no background task left), kick the audio session and re-issue play()
+        // as soon as the app comes back to the foreground.
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isPlaying else { return }
+                guard let sp = self.streamPlayer,
+                      sp.timeControlStatus != .playing else { return }
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+                try? AVAudioSession.sharedInstance().setActive(true)
+                sp.play()
+            }
+        }
     }
 
     private func handleInterruption(_ notification: Notification) {
@@ -642,16 +723,19 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         updateNowPlayingInfo()
     }
 
-    /// Retries playback every second for up to 4 seconds.
-    /// Used when play() is called while the audio session is held by Siri —
-    /// the session becomes available once Siri finishes speaking the intent response.
+    /// Retries playback every second for up to 8 seconds, refreshing the audio session each tick.
+    /// Covers: Siri TTS holding the session, lock-screen song transitions where AVPlayer is
+    /// buffering (.waitingToPlayAtSpecifiedRate) but not yet producing audio (.playing).
     private func schedulePlayRetry() {
         Task { @MainActor [weak self] in
             for _ in 0..<8 {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, self.currentTrack != nil else { return }
-                // Already genuinely playing — nothing to do.
-                if self.isActuallyPlaying { return }
+                // Done only when audio is genuinely being produced, not just buffering.
+                if let sp = self.streamPlayer, sp.timeControlStatus == .playing { return }
+                if self.player?.isPlaying == true { return }
+                // Refresh the session every tick while buffering or stalled.
+                // This keeps iOS from deprioritising the app mid-transition.
                 do {
                     try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
                     try AVAudioSession.sharedInstance().setActive(true)
@@ -664,8 +748,11 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     if p.play() { self.isPlaying = true; self.startTimer(); self.updateNowPlayingInfo() }
                 }
             }
-            // All retries exhausted and still not playing — skip to the next track.
-            guard let self, !self.isActuallyPlaying, !self.playlistQueue.isEmpty else { return }
+            // Retries exhausted — skip only if truly stuck, not if still buffering.
+            guard let self else { return }
+            let isBuffering = self.streamPlayer?.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            guard !isBuffering, !self.isActuallyPlaying,
+                  !self.playlistQueue.isEmpty || !self.youtubeQueue.isEmpty else { return }
             self.playNext()
         }
     }
@@ -686,7 +773,17 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        // Use the real AVPlayer timeControlStatus for the playback rate so the lock-screen
+        // timer only counts forward when audio is genuinely being produced. isPlaying stays
+        // true during buffering (so the UI play/pause button looks right), but the lock
+        // screen must not extrapolate time forward while the stream is stalled.
+        let rate: Double
+        if let sp = streamPlayer {
+            rate = (sp.timeControlStatus == .playing) ? 1.0 : 0.0
+        } else {
+            rate = (player?.isPlaying == true) ? 1.0 : 0.0
+        }
+        info[MPNowPlayingInfoPropertyPlaybackRate] = rate
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
@@ -697,12 +794,18 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         cc.togglePlayPauseCommand.isEnabled = true
         cc.nextTrackCommand.isEnabled     = true
         cc.previousTrackCommand.isEnabled = true
+        cc.changePlaybackPositionCommand.isEnabled = true
 
         cc.playCommand.addTarget  { [weak self] _ in self.map { if !$0.isPlaying { $0.togglePlayPause() } }; return .success }
         cc.pauseCommand.addTarget { [weak self] _ in self.map { if  $0.isPlaying { $0.togglePlayPause() } }; return .success }
         cc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.togglePlayPause(); return .success }
         cc.nextTrackCommand.addTarget     { [weak self] _ in Task { @MainActor in self?.playNext()     }; return .success }
         cc.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.playPrevious() }; return .success }
+        cc.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self, let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            Task { @MainActor in self.seek(to: e.positionTime) }
+            return .success
+        }
     }
 
     // MARK: - Last Played Persistence
@@ -760,5 +863,6 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     deinit {
         if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
         if let o = routeChangeObserver  { NotificationCenter.default.removeObserver(o) }
+        if let o = foregroundObserver   { NotificationCenter.default.removeObserver(o) }
     }
 }

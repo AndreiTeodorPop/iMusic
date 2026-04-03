@@ -104,7 +104,7 @@ struct YouTubeService {
         let videoIds = response.items.map { $0.id.videoId }.joined(separator: ",")
         let durations = try await fetchDurations(for: videoIds)
 
-        return response.items.map { item in
+        let results = response.items.map { item in
             YouTubeResult(
                 id:           item.id.videoId,
                 title:        item.snippet.title.htmlDecoded,
@@ -112,6 +112,36 @@ struct YouTubeService {
                 duration:     durations[item.id.videoId]
             )
         }
+
+        // Filter out clips that are clearly too short to be a full song (previews, intros, shorts).
+        let filtered = results.filter { $0.durationSeconds == 0 || $0.durationSeconds >= 60 }
+
+        // De-duplicate: collapse results that are the same song uploaded by different channels.
+        // YouTube titles use several patterns to differentiate re-uploads of the same track:
+        //   "Song - Artist | Official Music Video"
+        //   "Song - Artist | Official Lyric Video"
+        //   "Song - Artist (Live Session)"
+        //   "Song - Artist, Live 2025"
+        // We strip those suffixes and compare the core title words.
+        var seen = Set<String>()
+        return filtered.filter { seen.insert(deduplicationKey($0.title)).inserted }
+    }
+
+    private static func deduplicationKey(_ title: String) -> String {
+        var s = title.lowercased()
+        // Strip pipe-separated suffixes: "Song | Official Music Video" → "Song"
+        if let r = s.range(of: "|") { s = String(s[..<r.lowerBound]) }
+        // Strip comma-separated suffixes: "Song, Live 2025" → "Song"
+        if let r = s.range(of: ",") { s = String(s[..<r.lowerBound]) }
+        // Remove parenthetical/bracketed content: (Official Video), [Lyrics], 【HD】, etc.
+        s = s.replacingOccurrences(of: #"[\(\[\{【][^\)\]\}】]*[\)\]\}】]"#, with: " ", options: .regularExpression)
+        // Remove featured artist markers
+        s = s.replacingOccurrences(of: #"\b(feat\.?|ft\.?|featuring)\b.*"#, with: " ", options: .regularExpression)
+        // Replace hyphens (artist–title separators) with spaces
+        s = s.replacingOccurrences(of: "-", with: " ")
+        // Extract alphanumeric words and take the first 5 as the key
+        let words = s.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        return words.prefix(5).joined(separator: " ")
     }
 
     // Fetch video durations (contentDetails) for a comma-separated list of IDs

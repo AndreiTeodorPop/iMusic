@@ -198,6 +198,9 @@ struct YouTubeSearchView: View {
                 resultRow(result)
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
             }
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: player.currentTrack != nil ? 80 : 0)
+            }
             .scrollContentBackground(.hidden)
             .background { TabBackgroundDecoration() }
             .navigationTitle("Search")
