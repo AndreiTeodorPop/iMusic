@@ -145,9 +145,10 @@ final class AudioLibrary: ObservableObject {
 
     // MARK: - Metadata
 
-    /// Updates the title/artist for a local track. If the title changed, the
-    /// file is renamed on disk and playlist/liked-track memberships are migrated
-    /// to the new filename-derived UUID automatically.
+    /// Updates the title/artist for a local track.
+    /// The file is never renamed — the cache key is the filename, so edits
+    /// survive app-container path changes (reinstalls, Xcode rebuilds) and
+    /// re-importing the original file no longer creates duplicates.
     func updateTrackMetadata(_ track: Track, title: String, artist: String?) {
         let newTitle  = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? track.title
@@ -157,62 +158,29 @@ final class AudioLibrary: ObservableObject {
                         : nil
 
         var cache    = loadMetaCache()
-        let oldPath  = track.url.path
+        let cacheKey = track.url.lastPathComponent
         // Fall back to a synthetic entry so edits always succeed even on a cold cache.
-        let existing = cache[oldPath] ?? CachedMeta(
+        let existing = cache[cacheKey] ?? cache[track.url.path] ?? CachedMeta(
             title: track.title, artist: track.artist,
             album: track.album, duration: track.duration, modDate: Date()
         )
 
-        // ── Rename the file when the title changed ────────────────────────────
-        var newURL = track.url
-        if newTitle != track.title {
-            let ext      = track.url.pathExtension
-            let safe     = newTitle
-                .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|"))
-                .joined(separator: "_")
-            let newName  = ext.isEmpty ? safe : "\(safe).\(ext)"
-            let candidate = track.url.deletingLastPathComponent()
-                                     .appendingPathComponent(newName)
-            if !fileManager.fileExists(atPath: candidate.path),
-               (try? fileManager.moveItem(at: track.url, to: candidate)) != nil {
-                newURL = candidate
-            }
-        }
-
-        // ── Migrate cache from old path to new path ───────────────────────────
-        let newPath = newURL.path
-        if newPath != oldPath { cache.removeValue(forKey: oldPath) }
-        cache[newPath] = CachedMeta(
+        // ── Persist updated metadata (filename key, no file rename) ───────────
+        cache[cacheKey] = CachedMeta(
             title: newTitle, artist: newArtist,
             album: existing.album, duration: existing.duration, modDate: existing.modDate
         )
+        // Clean up any stale full-path key left from the old format
+        cache.removeValue(forKey: track.url.path)
         saveMetaCache(cache)
 
-        // ── Migrate playlists and liked IDs when the UUID changed ─────────────
-        if newPath != oldPath {
-            let newTrack = Track(url: newURL, title: newTitle, artist: newArtist,
-                                 album: existing.album, duration: existing.duration)
-            let oldID = track.id
-            let newID = newTrack.id
-            for i in playlists.indices where playlists[i].trackIDs.contains(oldID) {
-                playlists[i].trackIDs.remove(oldID)
-                playlists[i].trackIDs.insert(newID)
-            }
-            savePlaylists()
-            if likedTrackIDs.contains(oldID) {
-                likedTrackIDs.remove(oldID)
-                likedTrackIDs.insert(newID)
-                saveLikedTrackIDs()
-            }
-        }
-
         // ── Rebuild the in-memory track list ──────────────────────────────────
-        tracks = tracks.map { t in
-            guard t.id == track.id else { return t }
-            return Track(url: newURL, title: newTitle, artist: newArtist,
-                         album: existing.album, duration: existing.duration)
-        }
+        let updatedTrack = Track(url: track.url, title: newTitle, artist: newArtist,
+                                 album: existing.album, duration: existing.duration)
+        tracks = tracks.map { $0.id == track.id ? updatedTrack : $0 }
+
+        // ── Sync the player so NowPlayingView updates immediately ─────────────
+        AudioPlayer.shared.trackMetadataUpdated(oldTrack: track, newTrack: updatedTrack)
     }
 
     func deleteTrack(_ track: Track) async {
@@ -302,17 +270,18 @@ final class AudioLibrary: ObservableObject {
                     for (index, url) in audioURLs.enumerated() {
                         group.addTask {
                             let path = url.path
+                            let filename = url.lastPathComponent
                             let modDate = (try? url.resourceValues(
                                 forKeys: [.contentModificationDateKey]
                             ).contentModificationDate) ?? .distantPast
 
-                            // Cache hit — skip AVFoundation entirely
-                            if let cached = cache[path],
+                            // Cache hit — try filename key first, fall back to full path (migration)
+                            if let cached = cache[filename] ?? cache[path],
                                abs(cached.modDate.timeIntervalSince(modDate)) < 1 {
                                 return await (index,
                                         Track(url: url, title: cached.title, artist: cached.artist,
                                               album: cached.album, duration: cached.duration),
-                                        path, cached)
+                                        filename, cached)
                             }
 
                             // Cache miss — read metadata off the thread pool
@@ -323,7 +292,7 @@ final class AudioLibrary: ObservableObject {
                             return await (index,
                                     Track(url: url, title: m.title, artist: m.artist,
                                           album: m.album, duration: m.duration),
-                                    path, newMeta)
+                                    filename, newMeta)
                         }
                     }
                     var out: [(Int, Track, String, CachedMeta)] = []
@@ -331,9 +300,9 @@ final class AudioLibrary: ObservableObject {
                     return out.map { (index: $0.0, track: $0.1, path: $0.2, meta: $0.3) }
                 }
 
-            // Persist updated cache, pruning deleted files
-            let validPaths = Set(audioURLs.map { $0.path })
-            var updatedCache = cache.filter { validPaths.contains($0.key) }
+            // Persist updated cache using filename keys, pruning deleted files
+            let validFilenames = Set(audioURLs.map { $0.lastPathComponent })
+            var updatedCache = cache.filter { validFilenames.contains($0.key) }
             for r in results { updatedCache[r.path] = r.meta }
             saveMetaCache(updatedCache)
 

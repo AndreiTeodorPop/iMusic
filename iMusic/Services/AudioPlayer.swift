@@ -561,6 +561,20 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
     }
 
+    // MARK: - Metadata sync
+
+    /// Called by AudioLibrary after a track's title/artist is edited.
+    /// Updates currentTrack and the queues so NowPlayingView and navigation
+    /// reflect the new metadata without requiring a song change.
+    func trackMetadataUpdated(oldTrack: Track, newTrack: Track) {
+        if currentTrack?.id == oldTrack.id {
+            currentTrack = newTrack
+            updateNowPlayingInfo()
+        }
+        playlistQueue = playlistQueue.map { $0.id == oldTrack.id ? newTrack : $0 }
+        originalQueue = originalQueue.map { $0.id == oldTrack.id ? newTrack : $0 }
+    }
+
     // MARK: - Timer
 
     private func startTimer() {
